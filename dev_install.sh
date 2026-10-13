@@ -31,7 +31,18 @@ if [ ! -x "$VENV_PY" ]; then
 fi
 
 if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "$VENV_PY" -e "$REPO_ROOT"
+    # ``uv`` runs build backends in-process, and some uv/setuptools combinations
+    # fail an *editable* build with ``EEXIST`` from ``build_editable`` while the
+    # plain (non-editable) build succeeds. Verified with uv 0.12.10 +
+    # setuptools 84.0.0, reproducibly and independently of the project path.
+    # pip runs the backend in a subprocess and is unaffected, so a failed uv
+    # attempt falls back rather than leaving a half-installed venv behind.
+    if uv pip install --python "$VENV_PY" -e "$REPO_ROOT"; then
+        :
+    else
+        echo "warning: 'uv pip install -e' failed; retrying with pip" >&2
+        "$VENV_PY" -m pip install -e "$REPO_ROOT"
+    fi
 else
     "$VENV_PY" -m pip install -e "$REPO_ROOT"
 fi
