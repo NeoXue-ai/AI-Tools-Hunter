@@ -103,11 +103,20 @@ def test_run_follow_cancels_the_digest_loop_when_the_sweep_fails() -> None:
     from domainhunter.ingest.runner import _run_follow
 
     class _Store:
-        def get_source_cursor(self, _name: str) -> None:
-            return None
+        def __init__(self) -> None:
+            self.cursors: dict[str, str] = {}
+
+        def get_source_cursor(self, name: str) -> str | None:
+            return self.cursors.get(name)
+
+        def set_source_cursor(self, name: str, cursor: str) -> None:
+            self.cursors[name] = cursor
 
         def pending_ct_discovery_work_count(self) -> int:
             return 1  # never drains, so the digest loop would spin forever
+
+        def due_ct_discovery_work_count(self, *, now) -> int:  # noqa: ANN001
+            return 1  # something is always claimable, so the loop keeps going
 
     class _Log:
         log_id = "log"
@@ -115,7 +124,7 @@ def test_run_follow_cancels_the_digest_loop_when_the_sweep_fails() -> None:
     class _Fetcher:
         logs = (_Log(),)
 
-        async def tree_sizes(self) -> dict[str, int]:
+        async def tree_sizes(self, *, on_error=None) -> dict[str, int]:
             return {"log": 20}
 
         async def fetch_entries(self, *_args, **_kwargs):
@@ -198,3 +207,328 @@ def test_filter_pipeline_parallel_rdap_matches_sequential() -> None:
     assert len(seen) == 12
     assert observed_peak["concurrent"] <= 4
     assert observed_peak["concurrent"] >= 2  # actually parallel, not accidental serial
+
+
+class _CursorStore:
+    """Minimal store that keeps the cursor string in memory."""
+
+    def __init__(self, cursor: str | None = None) -> None:
+        self.cursor = cursor
+        self.writes = 0
+
+    def get_source_cursor(self, _name: str) -> str | None:
+        return self.cursor
+
+    def set_source_cursor(self, _name: str, cursor: str) -> None:
+        self.cursor = cursor
+        self.writes += 1
+
+
+def test_merge_cursor_keeps_the_other_logs_entries() -> None:
+    """The cursor is one JSON map shared by every log in a single row.
+
+    Writing ``json.dumps({log_id: index})`` replaced the whole map, so the
+    next cycle saw only the last log and reset every other log to the tree
+    head — silently discarding everything they had already ingested.
+    """
+    import json
+
+    from domainhunter.ingest.runner import _merge_cursor
+
+    store = _CursorStore(json.dumps({"alpha": 100, "beta": 200}))
+
+    _merge_cursor(store, "ct_log", "beta", 500)
+
+    assert json.loads(store.cursor or "{}") == {"alpha": 100, "beta": 500}
+
+
+def test_merge_cursor_never_moves_backwards() -> None:
+    import json
+
+    from domainhunter.ingest.runner import _merge_cursor
+
+    store = _CursorStore(json.dumps({"alpha": 100, "beta": 200}))
+
+    _merge_cursor(store, "ct_log", "alpha", 50)
+
+    assert json.loads(store.cursor or "{}") == {"alpha": 100, "beta": 200}
+    assert store.writes == 0, "a backwards cursor must not be written at all"
+
+
+def test_merge_cursor_starts_from_an_empty_map() -> None:
+    import json
+
+    from domainhunter.ingest.runner import _merge_cursor
+
+    store = _CursorStore(None)
+
+    _merge_cursor(store, "ct_log", "alpha", 7)
+
+    assert json.loads(store.cursor or "{}") == {"alpha": 7}
+
+
+def test_ingest_log_window_abandons_a_permanently_failing_page() -> None:
+    """A page that never succeeds must be given up on, not retried forever.
+
+    The old loop re-inserted a failed span at the front of the list with no
+    attempt counter, so one broken range pinned a worker indefinitely and
+    the sweep never finished. The window must instead abandon it, report
+    it, and leave the cursor *before* the hole.
+    """
+    import asyncio
+
+    from domainhunter.ingest.runner import _ingest_log_window
+
+    class _Poller:
+        source_name = "ct_log"
+
+        async def ingest_entries(self, entries):  # noqa: ANN001, ANN201
+            return len(entries), 0
+
+    class _Fetcher:
+        def __init__(self) -> None:
+            self.attempts: dict[tuple[int, int], int] = {}
+
+        async def fetch_entries(self, _log_id: str, start: int, end: int):  # noqa: ANN201
+            key = (start, end)
+            self.attempts[key] = self.attempts.get(key, 0) + 1
+            if start == 500:
+                raise RuntimeError("this page is cursed")
+            return [{"leaf_input": ""} for _ in range(end - start + 1)], None
+
+    fetcher = _Fetcher()
+    store = _CursorStore()
+
+    async def go():  # noqa: ANN202
+        return await _ingest_log_window(
+            store=store,
+            fetcher=fetcher,
+            poller=_Poller(),
+            log_id="log",
+            start=0,
+            tree_size=1200,
+            config=StartConfig(
+                page_max_attempts=3,
+                page_delay_seconds=0.0,
+                page_fetch_concurrency=2,
+                queue_maxsize=4,
+            ),
+            progress=lambda _event: None,
+        )
+
+    result = asyncio.run(go())
+
+    assert result.abandoned_spans == ((500, 999),)
+    assert fetcher.attempts[(500, 999)] == 3, "the cursed page was retried forever"
+    assert fetcher.attempts[(1000, 1199)] == 1
+    assert result.contiguous == 500, "the cursor must stop before the hole"
+
+
+def test_ingest_log_window_gives_up_on_an_empty_page() -> None:
+    """An empty ``get-entries`` response must not loop on the same range.
+
+    A server answering 200 with zero entries makes the "repair" sub-span
+    identical to the span just requested, so the sweep spun on it forever.
+    """
+    import asyncio
+
+    from domainhunter.ingest.runner import _ingest_log_window
+
+    class _Poller:
+        source_name = "ct_log"
+
+        async def ingest_entries(self, entries):  # noqa: ANN001, ANN201
+            return len(entries), 0
+
+    class _Fetcher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_entries(self, _log_id: str, start: int, end: int):  # noqa: ANN201
+            self.calls += 1
+            if start == 500:
+                return [], None  # 200 with an empty entry list
+            return [{"leaf_input": ""} for _ in range(end - start + 1)], None
+
+    fetcher = _Fetcher()
+
+    async def go():  # noqa: ANN202
+        return await _ingest_log_window(
+            store=_CursorStore(),
+            fetcher=fetcher,
+            poller=_Poller(),
+            log_id="log",
+            start=0,
+            tree_size=1200,
+            config=StartConfig(
+                page_max_attempts=2,
+                page_delay_seconds=0.0,
+                page_fetch_concurrency=1,
+            ),
+            progress=lambda _event: None,
+        )
+
+    result = asyncio.run(go())
+
+    assert result.abandoned_spans == ((500, 999),)
+    assert result.contiguous == 500
+
+
+def test_run_follow_skips_an_unreachable_log_and_keeps_sweeping() -> None:
+    """One dead log must not abort ``start`` for every other log."""
+    import asyncio
+    import json
+
+    from domainhunter.ingest.runner import _run_follow
+
+    class _Stop(Exception):
+        pass
+
+    class _Log:
+        def __init__(self, log_id: str) -> None:
+            self.log_id = log_id
+
+    class _Fetcher:
+        logs = (_Log("alive"), _Log("dead"))
+
+        async def tree_sizes(self, *, on_error=None):  # noqa: ANN001, ANN201
+            if on_error is not None:
+                on_error(self.logs[1], RuntimeError("connection refused"))
+            return {"alive": 3}
+
+        async def fetch_entries(self, _log_id: str, start: int, end: int):  # noqa: ANN201
+            return [{"leaf_input": ""} for _ in range(end - start + 1)], None
+
+    class _Store(_CursorStore):
+        def pending_ct_discovery_work_count(self) -> int:
+            return 0
+
+        def due_ct_discovery_work_count(self, *, now) -> int:  # noqa: ANN001
+            return 0
+
+    class _Poller:
+        source_name = "ct_log"
+
+        async def ingest_entries(self, entries):  # noqa: ANN001, ANN201
+            return len(entries), 0
+
+    class _Summary:
+        probes_run = 0
+        candidates_created = 0
+
+    events: list[dict] = []
+
+    def progress(event: dict) -> None:
+        events.append(event)
+        if event["event"] == "start.cycle":
+            raise _Stop
+
+    async def digest_once():  # noqa: ANN202
+        return _Summary()
+
+    store = _Store()
+
+    async def go() -> None:
+        with pytest.raises(_Stop):
+            await _run_follow(
+                store=store,
+                fetcher=_Fetcher(),
+                poller=_Poller(),
+                digest_once=digest_once,
+                config=StartConfig(
+                    entries=1, idle_seconds=0.0, round_delay_seconds=0.0
+                ),
+                progress=progress,
+            )
+
+    asyncio.run(go())
+
+    unreachable = next(
+        event for event in events if event["event"] == "start.logs_unreachable"
+    )
+    assert unreachable["logs"] == ["dead"]
+    assert unreachable["reachable"] == ["alive"]
+    assert unreachable["errors"] == {"dead": "RuntimeError: connection refused"}
+    # The reachable log still swept all the way to its head, and the dead one
+    # never got a cursor entry invented for it.
+    assert events[-1]["event"] == "start.cycle"
+    assert json.loads(store.cursor or "{}") == {"alive": 3}
+
+
+def test_digest_loop_exits_when_nothing_is_due_even_if_work_is_pending() -> None:
+    """A root parked on a future retry must not pin the digest loop forever.
+
+    The exit condition used to be ``pending == 0``, which counts every
+    unfinished root — including ones whose next attempt is hours away. One
+    such root kept the loop spinning inside cycle 1, so the next sweep never
+    started and the cursor never advanced again.
+    """
+    import asyncio
+    import json
+
+    from domainhunter.ingest.runner import _run_follow
+
+    class _Stop(Exception):
+        pass
+
+    class _Log:
+        log_id = "alive"
+
+    class _Fetcher:
+        logs = (_Log(),)
+
+        async def tree_sizes(self, *, on_error=None):  # noqa: ANN001, ANN201
+            return {"alive": 1}
+
+        async def fetch_entries(self, _log_id: str, start: int, end: int):  # noqa: ANN201
+            return [{"leaf_input": ""} for _ in range(end - start + 1)], None
+
+    class _Store(_CursorStore):
+        def pending_ct_discovery_work_count(self) -> int:
+            return 7  # a real backlog, but none of it claimable right now
+
+        def due_ct_discovery_work_count(self, *, now) -> int:  # noqa: ANN001
+            return 0
+
+    class _Poller:
+        source_name = "ct_log"
+
+        async def ingest_entries(self, entries):  # noqa: ANN001, ANN201
+            return len(entries), 0
+
+    class _Summary:
+        probes_run = 0
+        candidates_created = 0
+
+    events: list[dict] = []
+    digest_rounds = 0
+    store = _Store()
+
+    def progress(event: dict) -> None:
+        events.append(event)
+        if event["event"] == "start.cycle":
+            raise _Stop
+
+    async def digest_once():  # noqa: ANN202
+        nonlocal digest_rounds
+        digest_rounds += 1
+        return _Summary()
+
+    async def go() -> None:
+        with pytest.raises(_Stop):
+            await _run_follow(
+                store=store,
+                fetcher=_Fetcher(),
+                poller=_Poller(),
+                digest_once=digest_once,
+                config=StartConfig(
+                    entries=1, idle_seconds=0.0, round_delay_seconds=0.0
+                ),
+                progress=progress,
+            )
+
+    asyncio.run(go())
+
+    assert events[-1]["event"] == "start.cycle", "the cycle never finished"
+    assert digest_rounds == 0, "a round ran even though nothing was due"
+    assert json.loads(store.cursor or "{}") == {"alive": 1}

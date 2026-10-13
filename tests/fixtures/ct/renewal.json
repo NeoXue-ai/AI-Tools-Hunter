@@ -1,8 +1,8 @@
 {
   "scenario": "renewal",
-  "description": "Same domain observed twice with different cert_index values. Both events must ingest because the cert_index is part of the idempotency_key. Replaying the same fixture a second time is a no-op.",
+  "description": "Same domain observed twice with different cert_index values. The second sighting is a renewal of a root that is already recorded, so only the first event is written (storage amplification guard); replaying the fixture a second time is still a no-op. The distinct cert_index values remain part of the idempotency_key, so a replayed first event is still deduplicated by key.",
   "expected_hostnames": ["example.com"],
-  "expected_events_count": 2,
+  "expected_events_count": 1,
   "expected_idempotent_on_replay": true,
   "expected_replay_added_count": 0,
   "entries": [

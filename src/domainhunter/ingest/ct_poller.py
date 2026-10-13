@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from domainhunter.domain.events import SourceEvent
 from domainhunter.ingest.ct_events import build_ct_events
 from domainhunter.storage.sqlite import SQLiteStore
 
@@ -35,6 +36,13 @@ class CTPollResult:
     certificates_seen: int
     events_seen: int
     events_added: int
+    """Hostname sightings that were newly *recorded*.
+
+    One per root domain, not one per hostname: a root that has been seen
+    before is not written again (see ``SourceEventStore``). ``events_seen``
+    still counts every hostname the page mentioned.
+    """
+
     source_errors: tuple[str, ...] = ()
 
 
@@ -69,17 +77,25 @@ class CTPoller:
     async def ingest_entries(
         self, entries: tuple[CTCertificate, ...]
     ) -> tuple[int, int]:
-        """Persist certificate entries idempotently; returns (seen, added)."""
-        events_seen = 0
-        events_added = 0
+        """Persist certificate entries idempotently; returns (seen, added).
+
+        ``seen`` counts every hostname on the page. ``added`` counts the ones
+        that produced a *new* record — a root domain already in
+        ``ct_seen_domains`` is skipped, because everything downstream reads
+        only its first sighting and a busy root would otherwise be rewritten
+        thousands of times a day.
+
+        The whole page goes through a single transaction. Committing once per
+        hostname meant a connection open plus a journal fsync for every SAN,
+        which dominated the actual work at CT volume.
+        """
+        records: list[tuple[SourceEvent, str]] = []
         for entry in entries:
             events = build_ct_events(
                 entry.certificate,
                 entry.source_event_id,
                 entry.observed_at,
             )
-            events_seen += len(events)
-            for event in events:
-                if self._store.append_source_event(event, hostname=event.raw_subject):
-                    events_added += 1
-        return events_seen, events_added
+            records.extend((event, event.raw_subject) for event in events)
+        events_added = self._store.append_source_events(tuple(records))
+        return len(records), events_added

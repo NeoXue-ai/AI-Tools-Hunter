@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from domainhunter.filter.pipeline import FilterPipeline
 from domainhunter.filter.rdap_age import MemoryCache, Registration
+from tests.support.clock import ManualClock
 
 
 def _reg(days_ago: int, domain: str, registrar: str = "R") -> Registration:
@@ -123,6 +124,53 @@ def test_drop_unknown_rdap_option() -> None:
         drop_unknown_rdap=True,
     )
     assert pipeline.run(["unknown-domain.com"]) == ()
+
+
+def test_an_rdap_outage_reports_the_failure_count_for_backoff() -> None:
+    """A network failure stays retryable forever, with a growing failure count.
+
+    The orchestrator feeds ``rdap_attempts`` to ``network_retry_delay`` so an
+    outage backs off on the 1h/6h/24h/72h schedule instead of being re-queried
+    on every funnel pass — which is how the original livelock started.
+    """
+    clock = ManualClock()
+    cache = MemoryCache(miss_ttl=timedelta(minutes=15), clock=clock)
+    pipeline = FilterPipeline(
+        cache=cache,
+        rdap_fetcher=lambda _domain: None,  # RDAP is down for every domain
+        dns_checker=_fake_dns(set()),
+        require_dns=True,
+        drop_unknown_rdap=True,
+    )
+
+    observed: list[int] = []
+    for _ in range(3):
+        decision = pipeline.evaluate(["flaky.com"])[0]
+        observed.append(decision.rdap_attempts)
+        assert decision.candidate is None
+        assert decision.retryable is True
+        assert decision.reason == "rdap_unavailable"
+        # Let the TTL lapse so the next pass actually asks RDAP again.
+        clock.advance(timedelta(minutes=15))
+
+    assert observed == [1, 2, 3]
+
+
+def test_a_tld_without_an_rdap_endpoint_stays_terminal() -> None:
+    """``rdap_unsupported`` is a permanent fact, not an outage worth retrying."""
+    pipeline = FilterPipeline(
+        cache=MemoryCache(),
+        rdap_fetcher=lambda _domain: None,
+        dns_checker=_fake_dns(set()),
+        require_dns=True,
+        drop_unknown_rdap=True,
+    )
+
+    decision = pipeline.evaluate(["example.zzzz"])[0]
+    assert decision.candidate is None
+    assert decision.retryable is False
+    assert decision.reason == "rdap_unsupported"
+    assert decision.rdap_attempts == 0
 
 
 def test_cache_used_for_repeat_runs() -> None:

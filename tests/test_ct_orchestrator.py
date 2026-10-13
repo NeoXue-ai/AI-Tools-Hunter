@@ -29,7 +29,10 @@ from domainhunter.filter.pipeline import FilterDecision, FilterPipeline
 from domainhunter.filter.rdap_age import MemoryCache, Registration
 from domainhunter.domain.events import SourceEvent
 from domainhunter.ingest.ct_events import build_ct_events
-from domainhunter.ingest.ct_orchestrator import CTIngestOrchestrator
+from domainhunter.ingest.ct_orchestrator import (
+    CTIngestOrchestrator,
+    CTIngestRunSummary,
+)
 from domainhunter.ingest.ct_poller import CTCertificate, CTPage, CTPoller
 from domainhunter.llm.provider import MockLLMProvider
 from domainhunter.pipeline import DomainHunterPipeline
@@ -848,3 +851,136 @@ def test_digest_only_round_processes_work_without_polling(tmp_path) -> None:
     assert summary.certificates_seen == 0
     assert summary.probes_run == 1
     assert summary.candidates_created == 1
+
+
+@dataclass(frozen=True, slots=True)
+class _StubFilter:
+    """A funnel that rejects every domain with a canned decision.
+
+    Lets the retry-scheduling tests state the rejection they care about
+    (``rdap_unavailable`` with a failure count, ``dns_not_ready``, …) without
+    standing up RDAP and DNS fakes.
+    """
+
+    decisions: Mapping[str, FilterDecision]
+
+    def evaluate(self, domains, *, observed_at=None):
+        return tuple(
+            self.decisions.get(
+                domain,
+                FilterDecision(
+                    domain=domain, candidate=None, retryable=False, reason="not_a_candidate"
+                ),
+            )
+            for domain in domains
+        )
+
+
+def _next_attempt_at(store: SQLiteStore, domain: str) -> datetime:
+    with store._connection() as connection:
+        row = connection.execute(
+            "SELECT next_attempt_at FROM ct_discovery_work WHERE domain = ?", (domain,)
+        ).fetchone()
+    assert row is not None, f"{domain} is not in the work queue"
+    return datetime.fromisoformat(row["next_attempt_at"])
+
+
+def _retry_delay_used(
+    tmp_path, *, reason: str, rdap_attempts: int = 0
+) -> timedelta:
+    """Run one round that rejects ``down-ai.com`` and return the delay scheduled."""
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store.append_source_event(
+        SourceEvent("ct_log", "x:1", "down-ai.com", _OBSERVED), hostname="down-ai.com"
+    )
+    orchestrator = CTIngestOrchestrator(
+        store=store,
+        poller=_make_poller(store, ()),
+        pipeline=DomainHunterPipeline(store=store, probe=_FakeProbe({})),  # type: ignore[arg-type]
+        filter_pipeline=_StubFilter(
+            {
+                "down-ai.com": FilterDecision(
+                    domain="down-ai.com",
+                    candidate=None,
+                    retryable=True,
+                    reason=reason,
+                    rdap_attempts=rdap_attempts,
+                )
+            }
+        ),
+        probe_limit=10,
+        filter_retry_delay=timedelta(seconds=20),
+    )
+
+    _run(orchestrator.run_once(observed_at=_OBSERVED))
+    return _next_attempt_at(store, "down-ai.com") - _OBSERVED
+
+
+def test_an_rdap_outage_backs_off_on_the_network_schedule(tmp_path) -> None:
+    """A flat re-queue of every retryable rejection is what started the livelock.
+
+    ``--follow`` passes ``filter_retry_delay=20s``, so an RDAP-unavailable
+    domain used to come back every 20 seconds forever. It now follows the shared
+    1h/6h/24h/72h network schedule.
+    """
+    assert _retry_delay_used(tmp_path, reason="rdap_unavailable", rdap_attempts=1) == (
+        timedelta(hours=1)
+    )
+
+
+def test_a_dns_readiness_rejection_keeps_the_flat_delay(tmp_path) -> None:
+    """DNS readiness is a cheap local check — it does not need network backoff."""
+    assert _retry_delay_used(tmp_path, reason="dns_not_ready") == timedelta(seconds=20)
+
+
+@pytest.mark.parametrize(
+    ("attempts", "expected"),
+    [
+        (1, timedelta(hours=1)),
+        (2, timedelta(hours=6)),
+        (3, timedelta(hours=24)),
+        (4, timedelta(hours=72)),
+        (5, timedelta(hours=72)),
+        (99, timedelta(hours=72)),
+    ],
+)
+def test_rdap_retries_climb_the_schedule_and_never_give_up(
+    tmp_path, attempts: int, expected: timedelta
+) -> None:
+    """The schedule slows down but never discards.
+
+    docs/filter-layer-plan.md makes "never permanently discard an unavailable
+    RDAP domain" a settled decision, so an exhausted schedule stays on its
+    longest tier instead of completing the work item.
+    """
+    assert _retry_delay_used(tmp_path, reason="rdap_unavailable", rdap_attempts=attempts) == expected
+
+
+def test_an_rdap_outage_keeps_the_domain_in_the_queue(tmp_path) -> None:
+    """The work item must stay pending, not be completed away."""
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store.append_source_event(
+        SourceEvent("ct_log", "x:1", "down-ai.com", _OBSERVED), hostname="down-ai.com"
+    )
+    orchestrator = CTIngestOrchestrator(
+        store=store,
+        poller=_make_poller(store, ()),
+        pipeline=DomainHunterPipeline(store=store, probe=_FakeProbe({})),  # type: ignore[arg-type]
+        filter_pipeline=_StubFilter(
+            {
+                "down-ai.com": FilterDecision(
+                    domain="down-ai.com",
+                    candidate=None,
+                    retryable=True,
+                    reason="rdap_unavailable",
+                    rdap_attempts=99,
+                )
+            }
+        ),
+        probe_limit=10,
+    )
+
+    summary = _run(orchestrator.run_once(observed_at=_OBSERVED))
+
+    assert summary.pending_work == 1, "an RDAP outage must not complete the work item"
+    assert store.list_pending_ct_discovery_domains(limit=10) == ("down-ai.com",)

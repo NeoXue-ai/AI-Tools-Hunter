@@ -67,6 +67,13 @@ class FilterDecision:
     candidate: FilteredCandidate | None
     retryable: bool
     reason: str
+    rdap_attempts: int = 0
+    """Consecutive RDAP failures behind a retryable rejection.
+
+    Only set for ``rdap_unavailable``. The orchestrator feeds it to
+    :func:`~domainhunter.domain.retry_policy.network_retry_delay` so an RDAP
+    outage backs off instead of being re-queried on every funnel pass.
+    """
 
 
 class CandidateFilter(Protocol):
@@ -75,13 +82,25 @@ class CandidateFilter(Protocol):
     Implementations must return exactly one :class:`FilterDecision` per input
     domain, in input order. That completeness is what lets the orchestrator
     settle every work item it claimed: a candidate becomes a probe, a
-    ``retryable`` rejection comes back after ``filter_retry_delay``, and a
+    ``retryable`` rejection is re-queued (on the network schedule when RDAP is
+    the thing that failed, otherwise after ``filter_retry_delay``), and a
     terminal rejection is completed for good.
     """
 
     def evaluate(
         self, domains: list[str], *, observed_at: datetime | None = None
     ) -> tuple[FilterDecision, ...]: ...
+
+
+def _cache_miss_attempts(cache: RegistrationCache, domain: str) -> int:
+    """Ask an optional cache capability how many RDAP failures it has recorded.
+
+    ``MemoryCache`` counts consecutive misses for a domain, which is what lets
+    the orchestrator back off on the shared network schedule. Caches without the
+    capability report 0, and the caller falls back to the first tier.
+    """
+    probe = getattr(cache, "miss_attempts", None)
+    return int(probe(domain)) if callable(probe) else 0
 
 
 def _probe_payload(probe: object) -> dict[str, object]:
@@ -192,7 +211,10 @@ class FilterPipeline:
                 )
             elif self._cache.miss(domain):
                 age_verdicts[domain] = AgeVerdict(
-                    domain=domain, tier="unknown", age_days=None, reason="rdap_unavailable"
+                    domain=domain,
+                    tier="unknown",
+                    age_days=None,
+                    reason="rdap_unavailable",
                 )
             elif rdap_base(domain.rsplit(".", 1)[-1].lower()) is None:
                 # No RDAP endpoint exists for this TLD — that is permanent,
@@ -259,12 +281,23 @@ class FilterPipeline:
                 )
                 continue
             if verdict.tier == "unknown" and self._drop_unknown_rdap:
+                # ``rdap_unsupported`` means this TLD has no RDAP endpoint at
+                # all — a permanent fact, so the rejection is terminal.
+                # ``rdap_unavailable`` is a network condition: the domain stays
+                # in the queue and reports how many consecutive failures the
+                # orchestrator should back off on.
+                unavailable = verdict.reason == "rdap_unavailable"
                 decisions.append(
                     FilterDecision(
                         domain=domain,
                         candidate=None,
                         retryable=verdict.reason != "rdap_unsupported",
                         reason=verdict.reason,
+                        rdap_attempts=(
+                            _cache_miss_attempts(self._cache, domain)
+                            if unavailable
+                            else 0
+                        ),
                     )
                 )
                 continue

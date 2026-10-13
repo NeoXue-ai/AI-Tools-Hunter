@@ -67,3 +67,21 @@ def decide_next_action(
     if outcome_code is OutcomeCode.SUCCESS:
         return RetryDecision(next_check_at=None, terminal_status=None)
     raise ValueError(f"unsupported outcome code: {outcome_code}")
+
+
+def network_retry_delay(attempt_number: int) -> timedelta:
+    """How long to wait before retrying a *network* failure, clamped at the top.
+
+    Reuses :data:`_NETWORK_SCHEDULE` (1h / 6h / 24h / 72h) so a transient outage
+    backs off instead of being hammered.
+
+    Deliberately differs from :func:`decide_next_action` in one way: an
+    exhausted schedule **stays on its longest tier instead of terminating**.
+    The filter layer plan makes "never permanently discard" a settled decision
+    for an unavailable RDAP endpoint (``docs/filter-layer-plan.md``: RDAP 暂不可用
+    … 也不会永久丢弃), so this helper must never return "give up" — it can only
+    slow down.
+    """
+    if attempt_number < 1:
+        raise ValueError("attempt_number must be positive")
+    return _NETWORK_SCHEDULE[min(attempt_number, len(_NETWORK_SCHEDULE)) - 1]

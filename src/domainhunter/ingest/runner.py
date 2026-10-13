@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from domainhunter.ingest.ct_log_adapter import (
+    CTLogFetchError,
     CTLogFetcher,
     CTLogTarget,
     leaf_cert_envelope,
@@ -51,6 +52,11 @@ class StartConfig:
     probe_concurrency: int = 16
     page_fetch_concurrency: int = 8
     max_rounds: int | None = None
+    page_max_attempts: int = 5
+    # Bounded on purpose: an unbounded hand-off queue lets a fast producer
+    # outrun the SQLite writer and grow memory without limit. 8 workers x 64
+    # slots is ample headroom while still applying real backpressure.
+    queue_maxsize: int | None = 64
 
     def __post_init__(self) -> None:
         if self.hours is not None and self.hours <= 0:
@@ -67,6 +73,10 @@ class StartConfig:
             raise ValueError("round_delay_seconds must be non-negative")
         if self.page_fetch_concurrency < 1:
             raise ValueError("page_fetch_concurrency must be positive")
+        if self.page_max_attempts < 1:
+            raise ValueError("page_max_attempts must be positive")
+        if self.queue_maxsize is not None and self.queue_maxsize < 1:
+            raise ValueError("queue_maxsize must be positive or None")
         if self.follow and self.idle_seconds < 0:
             raise ValueError("idle_seconds must be non-negative")
         if min(
@@ -197,10 +207,37 @@ async def _run_follow(
     while True:
         cycle += 1
         stored = _parse_stored_cursor(store.get_source_cursor(poller.source_name))
-        tree_sizes = await fetcher.tree_sizes()
+        unreachable_errors: dict[str, str] = {}
+        tree_sizes = await fetcher.tree_sizes(
+            on_error=lambda log, exc: unreachable_errors.__setitem__(
+                log.log_id, f"{type(exc).__name__}: {exc}"
+            )
+        )
+        unreachable = [
+            log.log_id for log in fetcher.logs if log.log_id not in tree_sizes
+        ]
+        if unreachable:
+            progress(
+                {
+                    "event": "start.logs_unreachable",
+                    "logs": unreachable,
+                    "errors": dict(unreachable_errors),
+                    "reachable": sorted(tree_sizes),
+                    "hint": "skipping these logs for this cycle; the rest keep sweeping",
+                }
+            )
+            if not tree_sizes:
+                # Every configured log is down: sweeping nothing and then
+                # digesting an empty queue would spin forever. Surface it.
+                raise CTLogFetchError(
+                    "no CT log reachable: "
+                    + "; ".join(f"{k} ({v})" for k, v in unreachable_errors.items())
+                )
         resume_indices: dict[str, int] = {}
         for target in fetcher.logs:
             log_id = target.log_id
+            if log_id not in tree_sizes:
+                continue
             cursor = stored.get(log_id)
             if cursor is not None:
                 resume_indices[log_id] = cursor
@@ -219,6 +256,14 @@ async def _run_follow(
                     })
             else:
                 resume_indices[log_id] = tree_sizes[log_id]
+            if cursor is None:
+                # Persist the baseline *now*. A log that fails before its first
+                # checkpoint would otherwise have no cursor at all, and the next
+                # cycle would read "no cursor" and jump straight to whatever the
+                # tree head is by then — silently skipping the whole backlog.
+                _merge_cursor(
+                    store, poller.source_name, log_id, resume_indices[log_id]
+                )
         first_cycle = False
 
         # Candidates must appear while the sweep is still running, not only
@@ -288,14 +333,27 @@ async def _digest_alongside(
     """Digest rounds running concurrently with the ingest sweep.
 
     Returns ``(rounds, probes, candidates)`` for the cycle. Stops when the
-    sweep is finished and the work queue is drained (or the round budget
-    for this cycle is exhausted)."""
+    sweep is finished and nothing is *due* (or the round budget for this
+    cycle is exhausted).
+
+    The exit condition is deliberately ``due``, not ``pending``. Pending
+    counts every unfinished root — including ones whose retry is scheduled
+    six hours out — so a single backed-off root used to keep this loop
+    spinning forever, which meant the next ingest sweep never started and
+    the cursor never advanced again.
+    """
     rounds = 0
     probes = 0
     candidates = 0
     while True:
-        if ingest_task.done() and store.pending_ct_discovery_work_count() == 0:
+        due = store.due_ct_discovery_work_count(now=datetime.now(UTC))
+        if ingest_task.done() and due == 0:
             return rounds, probes, candidates
+        if due == 0:
+            # Everything outstanding is waiting on a future retry: idle
+            # instead of burning empty rounds until the sweep finishes.
+            await asyncio.sleep(config.round_delay_seconds)
+            continue
         summary = await digest_once()
         rounds += 1
         probes += summary.probes_run
@@ -308,12 +366,11 @@ async def _digest_alongside(
                 "probes": summary.probes_run,
                 "candidates": summary.candidates_created,
                 "candidates_total": candidates,
+                "due_work": due,
                 "pending_work": store.pending_ct_discovery_work_count(),
             }
         )
         if config.max_rounds is not None and rounds >= config.max_rounds:
-            return rounds, probes, candidates
-        if ingest_task.done() and store.pending_ct_discovery_work_count() == 0:
             return rounds, probes, candidates
         await asyncio.sleep(config.round_delay_seconds)
 
@@ -330,6 +387,48 @@ def _parse_stored_cursor(cursor: str | None) -> dict[str, int]:
     return {k: v for k, v in raw.items() if isinstance(v, int)}
 
 
+def _merge_cursor(
+    store: SQLiteStore, source_name: str, log_id: str, index: int
+) -> None:
+    """Advance *one* log's entry in the shared cursor map.
+
+    The cursor is a single JSON object keyed by ``log_id`` living in one
+    ``source_cursors`` row, so writing ``json.dumps({log_id: index})``
+    silently erases every other log's progress — the next cycle then
+    re-reads only this log's key, treats the others as "no cursor", and
+    resets them to the tree head (losing everything they had ingested).
+
+    Read the whole map, change only our own entry, write it back. The
+    write is monotonic: a cursor never moves backwards.
+    """
+    cursor = _parse_stored_cursor(store.get_source_cursor(source_name))
+    previous = cursor.get(log_id)
+    if previous is not None and previous >= index:
+        return
+    cursor[log_id] = index
+    store.set_source_cursor(source_name, json.dumps(cursor))
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowResult:
+    """What one log's sweep actually achieved.
+
+    ``contiguous`` is the highest index covered without a hole — *not*
+    ``tree_size``. Writing ``tree_size`` unconditionally would checkpoint
+    past an abandoned page and silently skip its entries forever.
+    """
+
+    ingested: int
+    contiguous: int
+    abandoned_spans: tuple[tuple[int, int], ...]
+    probe_error: str | None = None
+
+    @property
+    def probe_failed(self) -> bool:
+        """True when the very first page failed, so the stride is unknown."""
+        return self.probe_error is not None
+
+
 async def _ingest_window(
     *,
     store: SQLiteStore,
@@ -342,13 +441,20 @@ async def _ingest_window(
 ) -> tuple[int, int]:
     """Ingest [resume_index, tree_size) for every log with bounded parallelism."""
     total_ingested = 0
+    attempted = 0
+    probe_errors: dict[str, str] = {}
     for target in fetcher.logs:
         log_id = target.log_id
+        if log_id not in resume_indices or log_id not in tree_sizes:
+            # Unreachable this cycle (get-sth failed): the sweep of the other
+            # logs must not be held hostage by it.
+            continue
         start = resume_indices[log_id]
         tree_size = tree_sizes[log_id]
         if start >= tree_size:
             continue
-        total_ingested += await _ingest_log_window(
+        attempted += 1
+        result = await _ingest_log_window(
             store=store,
             fetcher=fetcher,
             poller=poller,
@@ -358,7 +464,35 @@ async def _ingest_window(
             config=config,
             progress=progress,
         )
-        store.set_source_cursor(poller.source_name, json.dumps({log_id: tree_size}))
+        total_ingested += result.ingested
+        if result.probe_failed:
+            # Nothing was read, so there is nothing to checkpoint: leaving the
+            # cursor alone keeps the window intact for the next cycle.
+            probe_errors[log_id] = result.probe_error or "unknown error"
+            continue
+        # Checkpoint the *contiguous* high-water mark, never tree_size: a
+        # page we gave up on leaves a hole, and claiming full coverage would
+        # skip its entries on every future run.
+        _merge_cursor(store, poller.source_name, log_id, result.contiguous)
+        if result.abandoned_spans:
+            progress(
+                {
+                    "event": "start.log_incomplete",
+                    "log": log_id,
+                    "abandoned_spans": [list(span) for span in result.abandoned_spans],
+                    "covered_until": result.contiguous,
+                    "tree_size": tree_size,
+                    "hint": "cursor stops at the hole; these spans are retried next cycle",
+                }
+            )
+    if attempted and len(probe_errors) == attempted:
+        # Every log we tried died on its very first page. Returning quietly
+        # would leave the digest loop spinning against a queue nobody will
+        # ever refill, so fail loudly instead.
+        raise CTLogFetchError(
+            "every log's sweep failed: "
+            + "; ".join(f"{log_id} ({error})" for log_id, error in probe_errors.items())
+        )
     queued = store.pending_ct_discovery_work_count()
     return total_ingested, queued
 
@@ -373,7 +507,7 @@ async def _ingest_log_window(
     tree_size: int,
     config: StartConfig,
     progress,
-) -> int:
+) -> _WindowResult:
     """One log's window: parallel fixed-stride page sweep, truncation-aware.
 
     The first probe page reveals the server's effective batch size; spans
@@ -381,8 +515,37 @@ async def _ingest_log_window(
     than their span enqueue a repair range, so no entry is ever skipped.
     The store cursor is advanced to the highest contiguous covered index
     every ~50 pages, so an interrupted run resumes cheaply.
+
+    Every retry is bounded. A span that fails — or answers with an empty
+    entry list, which would otherwise re-request the identical range
+    forever — ``page_max_attempts`` times is *abandoned* and reported, the
+    queue feeding the consumer is capped at ``queue_maxsize`` so a fast
+    producer cannot grow it without bound, and the returned ``contiguous``
+    deliberately stops before the hole so the checkpoint never claims
+    coverage it does not have.
     """
-    probe_raw, _ = await fetcher.fetch_entries(log_id, start, min(start + 499, tree_size - 1))
+    probe_end = min(start + 499, tree_size - 1)
+    try:
+        probe_raw, _ = await fetcher.fetch_entries(log_id, start, probe_end)
+    except Exception as error:  # noqa: BLE001 - a dead log must not sink the sweep
+        _LOGGER.warning("probe page fetch failed [%s:%s]: %s", log_id, start, error)
+        progress(
+            {
+                "event": "start.page_abandoned",
+                "log": log_id,
+                "span": [start, probe_end],
+                "attempts": 1,
+                "reason": f"{type(error).__name__}: {error}",
+                "hint": "cursor stops before this span; it is retried next cycle",
+            }
+        )
+        return _WindowResult(
+            ingested=0,
+            contiguous=start,
+            abandoned_spans=((start, probe_end),),
+            probe_error=f"{type(error).__name__}: {error}",
+        )
+
     state = {"stride": max(len(probe_raw), 1)}
     probe_covered = start + len(probe_raw)
 
@@ -395,8 +558,9 @@ async def _ingest_log_window(
         spans.append((cursor_pos, min(cursor_pos + state["stride"] - 1, tree_size - 1)))
         cursor_pos += state["stride"]
 
-    queue: asyncio.Queue[tuple[int, tuple[tuple[str, tuple[str, ...], str | None], int, int]] | None] = asyncio.Queue()
-    pages_done = 1
+    queue: asyncio.Queue[
+        tuple[int, tuple[tuple[str, tuple[str, ...], str | None], int, int]] | None
+    ] = asyncio.Queue(maxsize=config.queue_maxsize or 0)
     covered: dict[int, int] = {start: probe_covered}
     contiguous = start
     while contiguous in covered:
@@ -418,24 +582,63 @@ async def _ingest_log_window(
     probe_seen, _ = await poller.ingest_entries(probe_entries)
     total_ingested = probe_seen
     pages_done = 1
+    attempts: dict[tuple[int, int], int] = {}
+    abandoned: list[tuple[int, int]] = []
 
     async def worker() -> None:
         while spans:
             span_start, span_end = spans.pop(0)
+            key = (span_start, span_end)
+            failure: str | None = None
             try:
                 raw, _ = await fetcher.fetch_entries(log_id, span_start, span_end)
-            except Exception as error:  # noqa: BLE001 - a failed page is retried at the tail
-                _LOGGER.warning("backfill page fetch failed [%s:%s]: %s", span_start, span_end, error)
-                spans.insert(0, (span_start, span_end))
+            except Exception as error:  # noqa: BLE001 - a failed page is retried below
+                raw = []
+                failure = f"{type(error).__name__}: {error}"
+            else:
+                if not raw:
+                    # A 200 with zero entries is a truncation to nothing:
+                    # re-requesting the identical range would spin forever.
+                    failure = "empty entry list"
+            if failure is not None:
+                attempts[key] = attempts.get(key, 0) + 1
+                if attempts[key] >= config.page_max_attempts:
+                    abandoned.append(key)
+                    _LOGGER.warning(
+                        "abandoning page [%s:%s:%s] after %s attempts: %s",
+                        log_id,
+                        span_start,
+                        span_end,
+                        attempts[key],
+                        failure,
+                    )
+                    progress(
+                        {
+                            "event": "start.page_abandoned",
+                            "log": log_id,
+                            "span": [span_start, span_end],
+                            "attempts": attempts[key],
+                            "reason": failure,
+                            "hint": "cursor stops before this span; it is retried next cycle",
+                        }
+                    )
+                    continue
+                # Tail, not front: a permanently broken span must not starve
+                # the rest of the window while its retries are burned.
+                spans.append(key)
                 await asyncio.sleep(config.page_delay_seconds)
                 continue
-            certs: list[tuple[str, tuple[str, ...], str | None]] = []
+            page_certs: list[tuple[str, tuple[str, ...], str | None]] = []
             for offset, entry in enumerate(raw):
                 hostnames, issuer = parse_leaf_input(entry.get("leaf_input", ""))
                 if not hostnames:
                     continue
-                certs.append((f"{log_id}:{span_start + offset}", hostnames, issuer))
-            await queue.put((span_start, (tuple(certs), span_start + len(raw), span_end)))
+                page_certs.append(
+                    (f"{log_id}:{span_start + offset}", hostnames, issuer)
+                )
+            await queue.put(
+                (span_start, (tuple(page_certs), span_start + len(raw), span_end))
+            )
             if len(raw) < (span_end - span_start + 1):
                 # Server shorted this span — repair immediately (front of the
                 # queue) so the contiguous cursor pointer keeps advancing,
@@ -449,14 +652,14 @@ async def _ingest_log_window(
             item = await queue.get()
             if item is None:
                 return
-            span_start, (certs, returned_end, _span_end) = item
+            span_start, (page_certs, returned_end, _span_end) = item
             entries = tuple(
                 CTCertificate(
                     source_event_id=cert_id,
                     certificate=leaf_cert_envelope(hosts, issuer),
                     observed_at=datetime.now(UTC),
                 )
-                for cert_id, hosts, issuer in certs
+                for cert_id, hosts, issuer in page_certs
             )
             seen, _added = await poller.ingest_entries(entries)
             total_ingested += seen
@@ -465,7 +668,7 @@ async def _ingest_log_window(
             while contiguous in covered:
                 contiguous = covered.pop(contiguous)
             if pages_done % 50 == 0:
-                store.set_source_cursor(poller.source_name, json.dumps({log_id: contiguous}))
+                _merge_cursor(store, poller.source_name, log_id, contiguous)
                 progress(
                     {
                         "event": "start.ingest_progress",
@@ -478,12 +681,27 @@ async def _ingest_log_window(
                 )
             await asyncio.sleep(0)
 
-    workers = [
-        asyncio.create_task(worker()) for _ in range(min(config.page_fetch_concurrency, max(len(spans), 1)))
+    producers = [
+        asyncio.create_task(worker())
+        for _ in range(min(config.page_fetch_concurrency, max(len(spans), 1)))
     ]
     consumer_task = asyncio.create_task(consumer())
-    await asyncio.gather(*workers)
-    await queue.put(None)
-    await consumer_task
-    store.set_source_cursor(poller.source_name, json.dumps({log_id: tree_size}))
-    return total_ingested
+
+    async def close_queue_when_drained() -> None:
+        await asyncio.gather(*producers)
+        await queue.put(None)
+
+    try:
+        await asyncio.gather(close_queue_when_drained(), consumer_task)
+    except BaseException:
+        # A consumer that dies while producers are blocked on a full queue
+        # would hang the gather forever: cancel both sides and re-raise.
+        for task in (*producers, consumer_task):
+            task.cancel()
+        await asyncio.gather(*producers, consumer_task, return_exceptions=True)
+        raise
+    return _WindowResult(
+        ingested=total_ingested,
+        contiguous=contiguous,
+        abandoned_spans=tuple(abandoned),
+    )
