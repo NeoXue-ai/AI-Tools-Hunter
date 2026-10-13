@@ -60,7 +60,12 @@ def test_wildcard_fixture_strips_prefix_and_expands_san() -> None:
     assert all("*" not in hostname for hostname in hostnames)
 
 
-def test_wildcard_fixture_appends_one_event_per_hostname(tmp_path) -> None:
+def test_wildcard_fixture_records_the_root_once_for_every_hostname(tmp_path) -> None:
+    """All four SANs collapse to one root, so exactly one event is recorded.
+
+    Every hostname is still *seen*; only the redundant repeat writes are
+    skipped, because downstream readers key off the root's first sighting.
+    """
     fixture = _load("wildcard.json")
 
     async def run() -> None:
@@ -68,8 +73,10 @@ def test_wildcard_fixture_appends_one_event_per_hostname(tmp_path) -> None:
         poller = CTPoller(store=store, fetch_page=lambda cursor: _page_async(_make_entries(fixture), None))
         result = await poller.poll()
 
+        assert result.events_seen == len(fixture["expected_hostnames"])
         assert result.events_added == fixture["expected_events_count"]
         assert store.list_domains() == ("example.com",)
+        assert store.seen_domain_count() == 1
 
     asyncio.run(run())
 

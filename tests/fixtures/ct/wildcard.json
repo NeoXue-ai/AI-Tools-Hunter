@@ -1,8 +1,8 @@
 {
   "scenario": "wildcard",
-  "description": "CN=*.example.com with SAN entries for several subdomains. Per spec, the wildcard prefix is stripped before normalization so the registrable root is exposed.",
+  "description": "CN=*.example.com with SAN entries for several subdomains. Per spec, the wildcard prefix is stripped before normalization so the registrable root is exposed. All four names collapse to the single root example.com, so exactly one event is recorded: repeats of an already-recorded root are not written again (storage amplification guard).",
   "expected_hostnames": ["app.example.com", "blog.example.com", "example.com"],
-  "expected_events_count": 3,
+  "expected_events_count": 1,
   "expected_domain": "example.com",
   "entries": [
     {

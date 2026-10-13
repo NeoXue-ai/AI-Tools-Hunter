@@ -242,3 +242,85 @@ def test_fetcher_keeps_healthy_logs_moving_when_another_source_fails() -> None:
         )
 
     asyncio.run(run())
+
+
+def test_tree_sizes_reports_only_the_reachable_logs() -> None:
+    """``tree_sizes`` used to be a serial dict comprehension.
+
+    A single dead log made it raise, which took the whole ``start`` sweep
+    down with it. It must instead fetch every STH concurrently and hand the
+    per-log failures back through ``on_error``.
+    """
+    leaf = _x509_leaf_input(_make_cert())
+    good = CTLogTarget("good", "https://good.example.test")
+    dead = CTLogTarget("dead", "https://dead.example.test")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "dead.example.test":
+            return httpx.Response(503)
+        return _handler(1000, leaf)(request)
+
+    fetcher = CTLogFetcher(
+        logs=(good, dead),
+        transport=httpx.MockTransport(handler),
+        max_retries=1,
+        sleep=lambda _: None,
+    )
+    failures: list[tuple[str, str]] = []
+
+    import asyncio
+
+    async def run() -> dict[str, int]:
+        return await fetcher.tree_sizes(
+            on_error=lambda log, exc: failures.append(
+                (log.log_id, f"{type(exc).__name__}: {exc}")
+            )
+        )
+
+    sizes = asyncio.run(run())
+
+    assert sizes == {"good": 1000}
+    assert [log_id for log_id, _ in failures] == ["dead"]
+    assert "503" in failures[0][1]
+
+
+def test_tree_sizes_stays_concurrent() -> None:
+    """The STHs must be requested in parallel, not one after another.
+
+    ``httpx.MockTransport`` answers inline (it blocks the event loop), so the
+    overlap is measured with a genuinely async transport instead of a clock.
+    """
+    import asyncio
+
+    logs = tuple(
+        CTLogTarget(f"log{i}", f"https://log{i}.example.test") for i in range(4)
+    )
+
+    class _SlowSTHTransport(httpx.AsyncBaseTransport):
+        def __init__(self) -> None:
+            self.in_flight = 0
+            self.peak = 0
+
+        async def handle_async_request(
+            self, _request: httpx.Request
+        ) -> httpx.Response:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            try:
+                await asyncio.sleep(0.05)
+            finally:
+                self.in_flight -= 1
+            return httpx.Response(200, json={"tree_size": 42})
+
+    transport = _SlowSTHTransport()
+    fetcher = CTLogFetcher(logs=logs, transport=transport)
+
+    async def run() -> dict[str, int]:
+        return await fetcher.tree_sizes()
+
+    sizes = asyncio.run(run())
+
+    assert sizes == {f"log{i}": 42 for i in range(4)}
+    assert transport.peak == 4, (
+        f"only {transport.peak} STH request(s) were in flight at once"
+    )

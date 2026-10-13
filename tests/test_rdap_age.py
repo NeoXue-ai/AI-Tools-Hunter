@@ -2,12 +2,15 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from domainhunter.filter.rdap_age import (
     MemoryCache,
     Registration,
     classify_age,
     rdap_base,
 )
+from tests.support.clock import ManualClock
 
 
 def _reg(days_ago: int, domain: str = "example.com") -> Registration:
@@ -100,3 +103,69 @@ def test_memory_cache() -> None:
     cache.put(reg)
     assert cache.get("example.com") is reg
     assert cache.miss("example.com") is False
+
+
+def test_a_miss_expires_so_rdap_is_queried_again() -> None:
+    """The P0-4 defect: ``_misses`` was a set that never expired.
+
+    Every funnel pass answered ``rdap_unavailable`` without ever asking RDAP
+    again, while the orchestrator re-queued the domain every
+    ``filter_retry_delay`` — 20 seconds under ``--follow``.
+    """
+    clock = ManualClock()
+    cache = MemoryCache(miss_ttl=timedelta(minutes=15), clock=clock)
+
+    cache.record_miss("example.com")
+    assert cache.miss("example.com") is True
+
+    clock.advance(timedelta(minutes=14, seconds=59))
+    assert cache.miss("example.com") is True, "still inside the TTL"
+
+    clock.advance(timedelta(seconds=1))
+    assert cache.miss("example.com") is False, "TTL elapsed: query RDAP again"
+
+
+def test_a_miss_never_becomes_permanent() -> None:
+    """docs/filter-layer-plan.md: RDAP 暂不可用 … 也不会永久丢弃.
+
+    An earlier revision turned a 24-hour-old miss into a terminal
+    ``rdap_unsupported``, which silently dropped every domain of a TLD whose
+    endpoint was unreachable. A month of consecutive failures must still be
+    retryable.
+    """
+    clock = ManualClock()
+    cache = MemoryCache(clock=clock)
+
+    for _ in range(200):
+        cache.record_miss("example.com")
+        clock.advance(timedelta(hours=1))
+
+    clock.advance(timedelta(days=30))
+    assert cache.miss("example.com") is False, "a 30-day-old miss must still retry"
+    assert cache.miss_attempts("example.com") == 200
+
+
+def test_miss_attempts_counts_consecutive_failures_and_resets_on_success() -> None:
+    cache = MemoryCache()
+    assert cache.miss_attempts("example.com") == 0
+
+    cache.record_miss("example.com")
+    cache.record_miss("example.com")
+    assert cache.miss_attempts("example.com") == 2
+
+    cache.put(_reg(5))
+    assert cache.miss_attempts("example.com") == 0
+
+
+def test_miss_ttl_can_be_disabled() -> None:
+    clock = ManualClock()
+    cache = MemoryCache(miss_ttl=None, clock=clock)
+
+    cache.record_miss("example.com")
+    clock.advance(timedelta(days=365))
+    assert cache.miss("example.com") is True
+
+
+def test_miss_ttl_must_be_positive() -> None:
+    with pytest.raises(ValueError, match="miss_ttl must be positive or None"):
+        MemoryCache(miss_ttl=timedelta(0))

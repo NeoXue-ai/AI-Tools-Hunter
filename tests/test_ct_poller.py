@@ -38,7 +38,10 @@ def test_polls_ct_pages_with_cursor_and_idempotent_event_counts(tmp_path) -> Non
         replay = await poller.poll()
 
         assert first.certificates_seen == 1
-        assert first.events_added == 2
+        assert first.events_seen == 2  # CN example.com + SAN app.example.com
+        # Both names collapse to the root example.com, and a root is recorded
+        # once, so only one event is added.
+        assert first.events_added == 1
         assert replay.events_added == 0
         assert first.next_cursor == "argon:43"
         assert calls == [None, "argon:43"]

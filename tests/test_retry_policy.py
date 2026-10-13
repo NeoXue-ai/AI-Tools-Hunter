@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from domainhunter.domain.observations import OutcomeCode
-from domainhunter.domain.retry_policy import decide_next_action
+from domainhunter.domain.retry_policy import decide_next_action, network_retry_delay
 
 
 NOW = datetime(2026, 8, 16, tzinfo=UTC)
@@ -48,3 +48,27 @@ def test_http_rate_limit_is_not_retried_automatically() -> None:
 def test_rejects_zero_attempt_even_for_terminal_outcomes() -> None:
     with pytest.raises(ValueError, match="attempt_number must be positive"):
         decide_next_action(OutcomeCode.ROBOTS_DISALLOWED, attempt_number=0, now=NOW)
+
+
+def test_network_retry_delay_follows_the_shared_schedule() -> None:
+    assert network_retry_delay(1) == timedelta(hours=1)
+    assert network_retry_delay(2) == timedelta(hours=6)
+    assert network_retry_delay(3) == timedelta(hours=24)
+    assert network_retry_delay(4) == timedelta(hours=72)
+
+
+def test_network_retry_delay_clamps_instead_of_terminating() -> None:
+    """S2 must never give up on an unavailable RDAP endpoint.
+
+    ``decide_next_action`` signals "give up" with ``next_check_at=None`` once a
+    schedule is exhausted. That is the right answer for a dead site, but the
+    wrong one here: the filter layer plan says an unavailable RDAP endpoint
+    must not permanently discard a domain, so this helper can only slow down.
+    """
+    assert network_retry_delay(5) == timedelta(hours=72)
+    assert network_retry_delay(10_000) == timedelta(hours=72)
+
+
+def test_network_retry_delay_rejects_zero_attempts() -> None:
+    with pytest.raises(ValueError, match="attempt_number must be positive"):
+        network_retry_delay(0)

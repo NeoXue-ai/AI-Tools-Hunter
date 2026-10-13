@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 # Verisign RDAP serves these TLDs.
@@ -80,25 +81,91 @@ class RegistrationCache(Protocol):
     def miss(self, domain: str) -> bool: ...
 
 
-class MemoryCache:
-    """Thread/process-local cache with explicit miss tracking."""
+DEFAULT_MISS_TTL = timedelta(minutes=15)
+"""How long one failed RDAP lookup suppresses another query for that domain."""
 
-    def __init__(self) -> None:
+
+@dataclass(frozen=True, slots=True)
+class _MissRecord:
+    """One domain's consecutive-failure history."""
+
+    first_missed_at: datetime
+    last_missed_at: datetime
+    attempts: int
+
+
+class MemoryCache:
+    """Thread/process-local cache with explicit, expiring miss tracking.
+
+    A failed lookup used to poison the domain for the whole process lifetime:
+    ``_misses`` was a plain set that never expired, so the funnel kept answering
+    ``rdap_unavailable`` without ever asking RDAP again while the orchestrator
+    kept re-scheduling the domain every ``filter_retry_delay`` (20 seconds under
+    ``--follow``).
+
+    Misses now expire after ``miss_ttl`` so RDAP is actually re-queried, and the
+    consecutive-failure count survives the expiry via :meth:`miss_attempts` so
+    the caller can back off on the shared network schedule.
+
+    There is deliberately **no** terminal state here. An earlier revision turned
+    a miss into a permanent ``rdap_unsupported`` after 24 hours, which silently
+    dropped *every* domain of a TLD whose endpoint was unreachable — the exact
+    failure mode ``docs/filter-layer-plan.md`` rules out ("RDAP 暂不可用 … 也不会
+    永久丢弃"). Slowing a retry down is this module's job; giving up is not.
+    """
+
+    def __init__(
+        self,
+        *,
+        miss_ttl: timedelta | None = DEFAULT_MISS_TTL,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        if miss_ttl is not None and miss_ttl <= timedelta(0):
+            raise ValueError("miss_ttl must be positive or None")
         self._data: dict[str, Registration] = {}
-        self._misses: set[str] = set()
+        self._misses: dict[str, _MissRecord] = {}
+        self._miss_ttl = miss_ttl
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def get(self, domain: str) -> Registration | None:
         return self._data.get(domain)
 
     def put(self, registration: Registration) -> None:
         self._data[registration.domain] = registration
-        self._misses.discard(registration.domain)
+        self._misses.pop(registration.domain, None)
 
     def miss(self, domain: str) -> bool:
-        return domain in self._misses
+        """Return True while a recorded miss should suppress another RDAP query."""
+        record = self._misses.get(domain)
+        if record is None:
+            return False
+        if self._miss_ttl is None:
+            return True
+        if self._clock() - record.last_missed_at >= self._miss_ttl:
+            # The miss has expired: query RDAP again. The record is kept so the
+            # consecutive-failure count survives.
+            return False
+        return True
+
+    def miss_attempts(self, domain: str) -> int:
+        """Consecutive RDAP failures recorded for *domain*; 0 if it never failed.
+
+        Optional capability: the funnel asks for it through ``getattr`` so
+        duck-typed caches without this method keep working.
+        """
+        record = self._misses.get(domain)
+        return record.attempts if record is not None else 0
 
     def record_miss(self, domain: str) -> None:
-        self._misses.add(domain)
+        now = self._clock()
+        previous = self._misses.get(domain)
+        self._misses[domain] = _MissRecord(
+            first_missed_at=(
+                previous.first_missed_at if previous is not None else now
+            ),
+            last_missed_at=now,
+            attempts=(previous.attempts if previous is not None else 0) + 1,
+        )
 
 
 def rdap_base(tld: str) -> str | None:

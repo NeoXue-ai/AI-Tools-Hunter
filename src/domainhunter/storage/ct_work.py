@@ -14,6 +14,17 @@ from uuid import uuid4
 
 from domainhunter.storage.database import ConnectionFactory
 
+_DUE_PREDICATE = """
+    completed_at IS NULL
+    AND COALESCE(next_attempt_at, first_observed_at) <= ?
+    AND (lease_token IS NULL OR lease_expires_at <= ?)
+"""
+"""What ``claim_ct_discovery_work`` is willing to hand out.
+
+Shared verbatim with :meth:`CTWorkStore.due_ct_discovery_work_count` so the
+count and the claim can never disagree about what "due" means.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class CTDiscoveryWorkLease:
@@ -53,6 +64,25 @@ class CTWorkStore:
             ).fetchone()
         return int(row["count"])
 
+    def due_ct_discovery_work_count(self, *, now: datetime) -> int:
+        """Count the CT roots that could be claimed *right now*.
+
+        ``pending_ct_discovery_work_count`` counts every unfinished root,
+        including ones whose retry is scheduled hours into the future. The
+        digest loop used it as its exit condition, so a single backed-off
+        root kept the loop spinning forever and the next ingest sweep never
+        started. "Is there anything to do?" must mean "is anything due?".
+        """
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        stamp = now.isoformat()
+        with self._connection() as connection:
+            row = connection.execute(
+                f"SELECT COUNT(*) AS count FROM ct_discovery_work WHERE {_DUE_PREDICATE}",
+                (stamp, stamp),
+            ).fetchone()
+        return int(row["count"])
+
     def claim_ct_discovery_work(
         self, *, now: datetime, lease_seconds: float, limit: int
     ) -> tuple[CTDiscoveryWorkLease, ...]:
@@ -65,11 +95,9 @@ class CTWorkStore:
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
-                """
+                f"""
                 SELECT domain, attempt_number FROM ct_discovery_work
-                WHERE completed_at IS NULL
-                  AND COALESCE(next_attempt_at, first_observed_at) <= ?
-                  AND (lease_token IS NULL OR lease_expires_at <= ?)
+                WHERE {_DUE_PREDICATE}
                 ORDER BY next_attempt_at, first_observed_at, domain
                 LIMIT ?
                 """,

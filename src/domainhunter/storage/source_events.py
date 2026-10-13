@@ -7,14 +7,12 @@ first-seen baseline that makes "newborn" a real signal rather than a guess.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 from domainhunter.domain.events import SourceEvent
 from domainhunter.domain.normalization import normalize_hostname
-from domainhunter.storage.database import (
-    ConnectionFactory,
-    ensure_source_events_issuer_column,
-)
+from domainhunter.storage.database import ConnectionFactory
 
 
 class SourceEventStore:
@@ -24,57 +22,130 @@ class SourceEventStore:
 
     def append_source_event(self, event: SourceEvent, *, hostname: str) -> bool:
         """Append a source event exactly once and link it to a root domain."""
-        domain = normalize_hostname(hostname).registrable_domain
         with self._connection() as connection:
-            ensure_source_events_issuer_column(connection)
-            event_cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO source_events (
-                    idempotency_key, source, source_event_id, raw_subject, observed_at,
-                    source_timestamp, evidence_summary, parser_version, issuer
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.idempotency_key,
-                    event.source,
-                    event.source_event_id,
-                    event.raw_subject,
-                    event.observed_at.isoformat(),
-                    event.source_timestamp.isoformat() if event.source_timestamp else None,
-                    event.evidence_summary,
-                    event.parser_version,
-                    event.issuer,
-                ),
+            seen_roots = self._seen_roots(connection, (hostname,))
+            return self._append_source_event(
+                connection, event, hostname=hostname, seen_roots=seen_roots
             )
-            if event_cursor.rowcount == 0:
-                return False
 
-            event_id = event_cursor.lastrowid
+    def append_source_events(
+        self, records: tuple[tuple[SourceEvent, str], ...]
+    ) -> int:
+        """Append many events in one transaction; returns how many were new.
+
+        One connection and one commit per *page* instead of per hostname. The
+        per-event path spent more time opening connections and fsyncing the
+        journal than doing work, which is what capped ingestion at a few
+        hundred events per second.
+        """
+        if not records:
+            return 0
+        added = 0
+        with self._connection() as connection:
+            # One membership query for the whole page, not one per event.
+            seen_roots = self._seen_roots(
+                connection, tuple(hostname for _, hostname in records)
+            )
+            for event, hostname in records:
+                if self._append_source_event(
+                    connection, event, hostname=hostname, seen_roots=seen_roots
+                ):
+                    added += 1
+        return added
+
+    @staticmethod
+    def _seen_roots(
+        connection: sqlite3.Connection, hostnames: tuple[str, ...]
+    ) -> set[str]:
+        """Root domains already recorded in ``ct_seen_domains``."""
+        roots = {normalize_hostname(name).registrable_domain for name in hostnames}
+        if not roots:
+            return set()
+        placeholders = ",".join("?" for _ in roots)
+        rows = connection.execute(
+            f"SELECT domain FROM ct_seen_domains WHERE domain IN ({placeholders})",
+            tuple(roots),
+        ).fetchall()
+        return {row["domain"] for row in rows}
+
+    def _append_source_event(
+        self,
+        connection: sqlite3.Connection,
+        event: SourceEvent,
+        *,
+        hostname: str,
+        seen_roots: set[str],
+    ) -> bool:
+        """Write one event's five rows on an already-open connection.
+
+        ``ensure_source_events_issuer_column`` used to run here on every single
+        event — a ``PRAGMA table_info`` round trip per hostname, for a column
+        that :meth:`DatabaseBase._initialize` already guarantees at startup.
+        """
+        domain = normalize_hostname(hostname).registrable_domain
+        if event.source == "ct_log" and domain in seen_roots:
+            # Storage amplification guard. Everything downstream reads only the
+            # *first* sighting of a root — ``ct_seen_domains`` is INSERT OR
+            # IGNORE and the funnel keys off ``first_seen_at`` — so re-recording
+            # the same root for every certificate that mentions it buys rows,
+            # index pages and disk without buying information. A single busy
+            # root shows up in thousands of certificates a day, and a product
+            # certificate repeats its own root across every SAN.
+            #
+            # The *first* sighting is always written, so ``event_domains`` keeps
+            # one row per root and ``backfill_ct_discovery_state`` can still
+            # rebuild the work queue from it.
+            return False
+        event_cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO source_events (
+                idempotency_key, source, source_event_id, raw_subject, observed_at,
+                source_timestamp, evidence_summary, parser_version, issuer
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.idempotency_key,
+                event.source,
+                event.source_event_id,
+                event.raw_subject,
+                event.observed_at.isoformat(),
+                event.source_timestamp.isoformat() if event.source_timestamp else None,
+                event.evidence_summary,
+                event.parser_version,
+                event.issuer,
+            ),
+        )
+        if event_cursor.rowcount == 0:
+            return False
+
+        event_id = event_cursor.lastrowid
+        connection.execute(
+            "INSERT OR IGNORE INTO domains (domain, first_seen_at) VALUES (?, ?)",
+            (domain, event.observed_at.isoformat()),
+        )
+        connection.execute(
+            "INSERT INTO event_domains (event_id, domain) VALUES (?, ?)",
+            (event_id, domain),
+        )
+        if event.source == "ct_log":
             connection.execute(
-                "INSERT OR IGNORE INTO domains (domain, first_seen_at) VALUES (?, ?)",
-                (domain, event.observed_at.isoformat()),
+                """
+                INSERT OR IGNORE INTO ct_discovery_work (
+                    domain, first_observed_at, next_attempt_at
+                ) VALUES (?, ?, ?)
+                """,
+                (domain, event.observed_at.isoformat(), event.observed_at.isoformat()),
             )
             connection.execute(
-                "INSERT INTO event_domains (event_id, domain) VALUES (?, ?)",
-                (event_id, domain),
+                """
+                INSERT OR IGNORE INTO ct_seen_domains (
+                    domain, first_seen_at, first_source
+                ) VALUES (?, ?, ?)
+                """,
+                (domain, event.observed_at.isoformat(), event.source),
             )
-            if event.source == "ct_log":
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO ct_discovery_work (
-                        domain, first_observed_at, next_attempt_at
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (domain, event.observed_at.isoformat(), event.observed_at.isoformat()),
-                )
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO ct_seen_domains (
-                        domain, first_seen_at, first_source
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (domain, event.observed_at.isoformat(), event.source),
-                )
+            # Later events in the same page must see this root as taken.
+            seen_roots.add(domain)
         return True
 
     def event_domains(self, idempotency_key: str) -> tuple[str, ...]:

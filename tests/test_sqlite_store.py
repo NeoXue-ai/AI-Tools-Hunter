@@ -372,3 +372,181 @@ def test_filter_new_empty_and_unknown(tmp_path) -> None:
     assert store.filter_new(()) == ()
     assert store.filter_new(("x.com", "y.com")) == ("x.com", "y.com")
     assert store.seen_domain_count() == 0
+
+
+def test_due_ct_discovery_work_count_excludes_future_retries(tmp_path) -> None:
+    """``due`` must not count roots parked on a retry scheduled in the future.
+
+    The digest loop used the *pending* count as its exit condition, so a
+    single backed-off root kept it spinning forever and the next sweep never
+    started. Pending stays high; due must drop to zero.
+    """
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store.append_source_event(
+        SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
+        hostname="new-site.ai",
+    )
+    lease = store.claim_ct_discovery_work(now=OBSERVED_AT, lease_seconds=60, limit=1)[0]
+    later = OBSERVED_AT + timedelta(hours=6)
+    assert store.retry_ct_discovery_work(
+        "new-site.ai",
+        lease_token=lease.lease_token,
+        scheduled_at=later,
+        error="dns_not_ready",
+    )
+
+    assert store.pending_ct_discovery_work_count() == 1
+    assert store.due_ct_discovery_work_count(now=OBSERVED_AT) == 0
+    assert store.due_ct_discovery_work_count(now=later) == 1
+
+
+def test_due_ct_discovery_work_count_ignores_a_live_lease(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store.append_source_event(
+        SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
+        hostname="new-site.ai",
+    )
+    store.claim_ct_discovery_work(now=OBSERVED_AT, lease_seconds=60, limit=1)
+
+    assert store.pending_ct_discovery_work_count() == 1
+    assert store.due_ct_discovery_work_count(now=OBSERVED_AT) == 0
+    assert store.due_ct_discovery_work_count(
+        now=OBSERVED_AT + timedelta(seconds=61)
+    ) == 1
+
+
+def test_due_ct_discovery_work_count_ignores_completed_roots(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store.append_source_event(
+        SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
+        hostname="new-site.ai",
+    )
+    lease = store.claim_ct_discovery_work(now=OBSERVED_AT, lease_seconds=60, limit=1)[0]
+    assert store.complete_ct_discovery_domain(
+        "new-site.ai", lease_token=lease.lease_token, at=OBSERVED_AT, reason="rdap_too_old"
+    )
+
+    assert store.due_ct_discovery_work_count(now=OBSERVED_AT) == 0
+    assert store.pending_ct_discovery_work_count() == 0
+
+
+def test_append_source_events_batches_the_same_rows_as_the_single_path(tmp_path) -> None:
+    """The batched path must write exactly what the per-event path wrote."""
+    batched = SQLiteStore(tmp_path / "batched.db")
+    single = SQLiteStore(tmp_path / "single.db")
+    records = tuple(
+        (
+            SourceEvent("ct_log", f"argon:{i}", f"h{i}-batch.com", OBSERVED_AT),
+            f"h{i}-batch.com",
+        )
+        for i in range(5)
+    )
+
+    assert batched.append_source_events(records) == 5
+    for event, hostname in records:
+        assert single.append_source_event(event, hostname=hostname) is True
+
+    def dump(store: SQLiteStore) -> dict[str, list[tuple]]:
+        with store._connection() as connection:
+            return {
+                table: [
+                    tuple(row)
+                    for row in connection.execute(f"SELECT * FROM {table}").fetchall()
+                ]
+                for table in (
+                    "source_events",
+                    "domains",
+                    "event_domains",
+                    "ct_seen_domains",
+                    "ct_discovery_work",
+                )
+            }
+
+    assert dump(batched) == dump(single)
+
+
+def test_append_source_events_is_idempotent_across_batches(tmp_path) -> None:
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    records = (
+        (SourceEvent("ct_log", "argon:1", "a-batch.com", OBSERVED_AT), "a-batch.com"),
+        (SourceEvent("ct_log", "argon:2", "b-batch.com", OBSERVED_AT), "b-batch.com"),
+    )
+
+    assert store.append_source_events(records) == 2
+    assert store.append_source_events(records) == 0
+    assert store.append_source_events(()) == 0
+
+
+def test_connection_enables_wal_and_normal_synchronous(tmp_path) -> None:
+    """journal_mode=delete + synchronous=FULL made every commit fsync twice."""
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    with store._connection() as connection:
+        journal = connection.execute("PRAGMA journal_mode").fetchone()[0]
+        synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
+        busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
+
+    assert journal == "wal"
+    assert synchronous == 1  # NORMAL
+    assert busy_timeout > 0
+
+
+def test_repeat_sightings_of_a_known_root_are_not_recorded_again(tmp_path) -> None:
+    """A busy root must not be rewritten for every certificate mentioning it.
+
+    Everything downstream reads only the *first* sighting, so the repeat rows
+    bought index pages and disk without buying information. A single busy root
+    appears in thousands of certificates a day.
+    """
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    first = SourceEvent("ct_log", "argon:1", "example.com", OBSERVED_AT)
+    second = SourceEvent("ct_log", "argon:2", "www.example.com", OBSERVED_AT)
+
+    assert store.append_source_event(first, hostname="example.com") is True
+    assert store.append_source_event(second, hostname="www.example.com") is False
+
+    with store._connection() as connection:
+        events = connection.execute(
+            "SELECT COUNT(*) AS n FROM source_events"
+        ).fetchone()["n"]
+        links = connection.execute(
+            "SELECT COUNT(*) AS n FROM event_domains"
+        ).fetchone()["n"]
+    assert events == 1
+    assert links == 1
+    # The root is still recorded exactly once, so the work queue stays rebuildable.
+    assert store.get_ct_first_seen_at("example.com") == OBSERVED_AT
+    assert store.pending_ct_discovery_work_count() == 1
+    assert store.list_domains() == ("example.com",)
+
+
+def test_batched_page_records_one_event_per_new_root(tmp_path) -> None:
+    """Dedup must hold *within* a page, not only across pages.
+
+    Distinct ``source_event_id`` values, so the idempotency key cannot be
+    what rejects the middle record — only the already-recorded root can.
+    """
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    records = (
+        (SourceEvent("ct_log", "argon:1", "a.example.com", OBSERVED_AT), "a.example.com"),
+        (SourceEvent("ct_log", "argon:2", "b.example.com", OBSERVED_AT), "b.example.com"),
+        (SourceEvent("ct_log", "argon:3", "other.com", OBSERVED_AT), "other.com"),
+    )
+
+    assert store.append_source_events(records) == 2
+    assert store.list_domains() == ("example.com", "other.com")
+
+
+def test_non_ct_sources_keep_every_event(tmp_path) -> None:
+    """The amplification guard is CT-specific: other sources are not deduped."""
+    store = SQLiteStore(tmp_path / "domainhunter.db")
+    first = SourceEvent("manual", "m:1", "example.com", OBSERVED_AT)
+    second = SourceEvent("manual", "m:2", "www.example.com", OBSERVED_AT)
+
+    assert store.append_source_event(first, hostname="example.com") is True
+    assert store.append_source_event(second, hostname="www.example.com") is True
+
+    with store._connection() as connection:
+        events = connection.execute(
+            "SELECT COUNT(*) AS n FROM source_events"
+        ).fetchone()["n"]
+    assert events == 2

@@ -17,12 +17,16 @@ track several logs independently with one cursor string.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import logging
+import random
 import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Self
 
 import httpx
@@ -30,6 +34,8 @@ from cryptography import x509
 from cryptography.x509.oid import ExtensionOID, NameOID
 
 from domainhunter.ingest.ct_poller import CTCertificate, CTPage
+
+_LOGGER = logging.getLogger("domainhunter.ct_log_adapter")
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +60,31 @@ DEFAULT_LOG = CTLogTarget(
 )
 
 RETRY_BACKOFF_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0)
+RETRY_AFTER_MAX_SECONDS: float = 60.0
+"""Upper bound applied to a server-provided ``Retry-After`` hint."""
 RETRYABLE_STATUSES: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header (delay-seconds or HTTP-date) to seconds."""
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
 class CTLogFetchError(RuntimeError):
@@ -267,7 +297,11 @@ class CTLogFetcher:
         self._page_size = max_entries_per_page
         self._max_retries = max_retries
         self._clock = clock
-        self._sleep = sleep or _noop_sleep
+        # Defaulting to a no-op made the declared backoff a lie: three retries
+        # against an overloaded log fired within a millisecond. Real sleeps are
+        # the default; pass ``sleep=_noop_sleep`` (or ``sleep=lambda _: None``)
+        # only when a caller genuinely must not wait.
+        self._sleep = sleep if sleep is not None else asyncio.sleep
         self._client = httpx.AsyncClient(
             headers={"User-Agent": user_agent, "Accept": "application/json"},
             timeout=timeout,
@@ -340,9 +374,31 @@ class CTLogFetcher:
                 return await self._get_entries(log, start, end), log
         raise ValueError(f"unknown log_id {log_id!r}")
 
-    async def tree_sizes(self) -> dict[str, int]:
-        """Return the current tree size of every configured log."""
-        return {log.log_id: await self._get_sth(log) for log in self._logs}
+    async def tree_sizes(self, *, on_error=None) -> dict[str, int]:
+        """Return the tree size of every *reachable* configured log.
+
+        One dead log must not sink the whole sweep, so the signed tree
+        heads are fetched **concurrently** and per-log failures are
+        reported through ``on_error(log, exc)`` (falling back to a log
+        line) instead of propagating. A log missing from the result means
+        "unreachable this cycle"; callers skip it and keep sweeping the
+        rest, instead of aborting ``start`` entirely.
+        """
+        results = await asyncio.gather(
+            *(self._get_sth(log) for log in self._logs), return_exceptions=True
+        )
+        sizes: dict[str, int] = {}
+        for log, result in zip(self._logs, results):
+            if isinstance(result, BaseException):
+                if on_error is not None:
+                    on_error(log, result)
+                else:
+                    _LOGGER.warning(
+                        "tree size unavailable [%s]: %s", log.log_id, result
+                    )
+                continue
+            sizes[log.log_id] = result
+        return sizes
 
     async def leaf_timestamp(self, log_id: str, index: int) -> datetime | None:
         """Fetch one entry and return its certificate ``notBefore`` (UTC)."""
@@ -382,6 +438,7 @@ class CTLogFetcher:
         url = f"{log.base_url}{path}"
         last_error: Exception | None = None
         for attempt in range(self._max_retries):
+            retry_after: str | None = None
             try:
                 response = await self._client.get(url, params=params)
             except httpx.TimeoutException as error:
@@ -390,6 +447,7 @@ class CTLogFetcher:
                 last_error = CTLogFetchError(f"{log.log_id}: {path} transport error: {error}")
             else:
                 if response.status_code in RETRYABLE_STATUSES:
+                    retry_after = response.headers.get("Retry-After")
                     last_error = CTLogFetchError(
                         f"{log.log_id}: {path} retryable status={response.status_code}"
                     )
@@ -408,10 +466,24 @@ class CTLogFetcher:
                         raise CTLogFetchError(f"{log.log_id}: {path} payload must be an object")
                     return payload
             if attempt < self._max_retries - 1:
-                await self._sleep(RETRY_BACKOFF_SECONDS[attempt])
+                await self._sleep(self._backoff_delay(attempt, retry_after))
         raise CTLogFetchError(
             f"{log.log_id}: {path} unreachable after {self._max_retries} attempts: {last_error}"
         )
+
+    def _backoff_delay(self, attempt: int, retry_after: str | None) -> float:
+        """Seconds to wait before retry ``attempt``.
+
+        ``RETRY_BACKOFF_SECONDS`` is the floor. A server-provided
+        ``Retry-After`` may only push the wait out, and is clamped so a hostile
+        value cannot stall the sweep. Jitter keeps several logs from retrying in
+        lockstep after a shared upstream incident.
+        """
+        base = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+        server_hint = _parse_retry_after(retry_after)
+        if server_hint is not None:
+            base = max(base, min(server_hint, RETRY_AFTER_MAX_SECONDS))
+        return base + random.uniform(0.0, base * 0.25)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -424,4 +496,5 @@ class CTLogFetcher:
 
 
 async def _noop_sleep(_seconds: float) -> None:
+    """Explicit opt-out for callers that must not wait (tests, probes)."""
     return None

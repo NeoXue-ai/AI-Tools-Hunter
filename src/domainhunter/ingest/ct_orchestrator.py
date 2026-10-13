@@ -23,12 +23,13 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from domainhunter.filter.pipeline import CandidateFilter, FilteredCandidate
+from domainhunter.domain.retry_policy import network_retry_delay
+from domainhunter.domain.verification import CandidateVerification
+from domainhunter.filter.pipeline import CandidateFilter, FilterDecision, FilteredCandidate
 from domainhunter.ingest.ct_poller import CTPoller, CTPollResult
 from domainhunter.llm.provider import LLMProvider
 from domainhunter.pipeline import DomainHunterPipeline, enrich_candidate_with_llm
 from domainhunter.storage.sqlite import SQLiteStore
-from domainhunter.domain.verification import CandidateVerification
 
 _LOGGER = logging.getLogger("domainhunter.ct_ingest")
 
@@ -66,6 +67,11 @@ class CTIngestOrchestrator:
         probe_concurrency: int = 1,
         filter_retry_delay: timedelta = timedelta(minutes=5),
     ) -> None:
+        """``filter_retry_delay`` covers the cheap local retryables only.
+
+        RDAP outages ignore it and follow the shared network schedule instead —
+        see :meth:`_retry_delay_for`.
+        """
         if probe_limit < 1:
             raise ValueError("probe_limit must be positive")
         if work_lease_seconds <= 0:
@@ -121,7 +127,12 @@ class CTIngestOrchestrator:
         filtered_by_domain: dict[str, FilteredCandidate] = {}
         strict_rejections = 0
         if self._filter_pipeline is not None:
-            decisions = self._filter_pipeline.evaluate(roots_to_probe, observed_at=stamp)
+            # The funnel is synchronous and network-bound (urllib RDAP,
+            # socket.getaddrinfo DNS). Calling it inline froze the event loop for
+            # the whole batch, stalling CT page ingest and the web UI with it.
+            decisions = await asyncio.to_thread(
+                self._filter_pipeline.evaluate, roots_to_probe, observed_at=stamp
+            )
             kept = tuple(
                 decision.candidate
                 for decision in decisions
@@ -142,7 +153,7 @@ class CTIngestOrchestrator:
                     self._store.retry_ct_discovery_work(
                         decision.domain,
                         lease_token=lease_token,
-                        scheduled_at=stamp + self._filter_retry_delay,
+                        scheduled_at=stamp + self._retry_delay_for(decision),
                         error=decision.reason,
                     )
                 else:
@@ -216,6 +227,28 @@ class CTIngestOrchestrator:
             source_errors=poll_result.source_errors,
             pending_work=self._store.pending_ct_discovery_work_count(),
         )
+
+    def _retry_delay_for(self, decision: FilterDecision) -> timedelta:
+        """How long to wait before re-queueing one retryable funnel rejection.
+
+        Two different conditions, two different cadences:
+
+        * ``rdap_unavailable`` — a *network* condition, so it follows the shared
+          1h/6h/24h/72h network schedule. A flat 20-second delay (what
+          ``--follow`` passes as ``filter_retry_delay``) meant a funnel pass
+          re-queued an RDAP-unavailable domain on every round, which is exactly
+          how the original livelock got started.
+        * anything else (``dns_not_ready``) — a local, cheap check, so it keeps
+          the flat ``filter_retry_delay``.
+
+        ``network_retry_delay`` clamps at its longest tier instead of
+        terminating, so a domain behind a dead RDAP endpoint stays in the queue
+        forever — see the note in ``docs/filter-layer-plan.md`` about never
+        permanently discarding a domain.
+        """
+        if decision.reason == "rdap_unavailable":
+            return network_retry_delay(max(decision.rdap_attempts, 1))
+        return self._filter_retry_delay
 
     async def _probe_roots_parallel(
         self,
@@ -321,14 +354,28 @@ class CTIngestOrchestrator:
                 reason="not_a_candidate",
             )
         else:
-            self._store.retry_ct_discovery_work(
-                root,
-                lease_token=work.lease_token,
-                scheduled_at=(
-                    run.retry_decision.next_check_at or stamp + timedelta(minutes=5)
-                ),
-                error=run.observation.outcome_code.value,
-            )
+            next_check_at = run.retry_decision.next_check_at
+            if next_check_at is None:
+                # ``decide_next_action`` signals a terminal outcome by returning
+                # ``next_check_at=None`` (robots disallow, 429, SSRF block, or an
+                # exhausted retry schedule). Substituting a 5-minute timer here
+                # re-probed those domains forever.
+                self._store.complete_ct_discovery_domain(
+                    root,
+                    lease_token=work.lease_token,
+                    at=stamp,
+                    reason=(
+                        run.retry_decision.terminal_status
+                        or run.observation.outcome_code.value
+                    ),
+                )
+            else:
+                self._store.retry_ct_discovery_work(
+                    root,
+                    lease_token=work.lease_token,
+                    scheduled_at=next_check_at,
+                    error=run.observation.outcome_code.value,
+                )
 
     def _append_verification(
         self,

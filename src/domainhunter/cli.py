@@ -228,8 +228,9 @@ def _build_parser() -> argparse.ArgumentParser:
     start_cmd.add_argument("--page-fetch-concurrency", type=int, default=8)
     start_cmd.add_argument(
         "--filter-retry-delay", type=float, default=None,
-        help="seconds before failed DNS/RDAP checks are retried "
-        "(default 300, or 20 in --follow mode)",
+        help="seconds before a failed DNS check is retried "
+        "(default 300, or 20 in --follow mode). RDAP outages ignore this and "
+        "follow the shared 1h/6h/24h/72h network schedule instead",
     )
     start_cmd.add_argument("--max-rounds", type=int)
     start_cmd.add_argument("--tier1-days", type=int, default=30)

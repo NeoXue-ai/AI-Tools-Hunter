@@ -176,6 +176,18 @@ class DatabaseBase:
         connection = sqlite3.connect(self._database_path)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        # WAL is a property of the database file, so this is a no-op once the
+        # file is converted. Without it the single writer blocks every reader
+        # and each commit rewrites the rollback journal twice.
+        connection.execute("PRAGMA journal_mode = WAL")
+        # The documented safe pairing with WAL: fsync at checkpoints instead of
+        # once per commit. A page of CT events then costs one durable write
+        # instead of thousands of journal flushes.
+        connection.execute("PRAGMA synchronous = NORMAL")
+        # The sweep and the digest loop write from separate connections (and
+        # possibly separate processes); wait for the lock rather than failing
+        # the whole page with "database is locked".
+        connection.execute("PRAGMA busy_timeout = 5000")
         try:
             yield connection
             connection.commit()
