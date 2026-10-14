@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI-Tools-Hunter Architecture",
+    "output": "ai-tools-hunter-architecture.html",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "visual_preset": "signal-flow"
+  },
+  "components": [
+    { "id": "ct-logs", "type": "external", "label": "CT Logs", "sublabel": "RFC 6962", "pos": [30, 220], "size": [110, 50] },
+    { "id": "ingest", "type": "backend", "label": "CT Ingest", "sublabel": "adapter + runner", "pos": [160, 220], "size": [130, 54] },
+    { "id": "first-seen", "type": "database", "label": "First-seen", "sublabel": "ct_seen_domains", "pos": [310, 220], "size": [130, 50] },
+    { "id": "s1", "type": "backend", "label": "S1 Static", "sublabel": "name shape", "pos": [460, 220], "size": [100, 54] },
+    { "id": "s2", "type": "backend", "label": "S2 RDAP", "sublabel": "age ≤30d / ≤90d", "pos": [580, 220], "size": [110, 54] },
+    { "id": "s3", "type": "backend", "label": "S3 DNS", "sublabel": "resolves?", "pos": [710, 220], "size": [90, 54] },
+    { "id": "s4", "type": "backend", "label": "S4 Probe", "sublabel": "HTTP + SSRF guard", "pos": [820, 220], "size": [110, 54] },
+    { "id": "s5", "type": "cloud", "label": "S5 LLM", "sublabel": "optional classify", "pos": [820, 90], "size": [110, 54], "tag": "OpenAI-compatible" },
+    { "id": "sqlite", "type": "database", "label": "SQLite", "sublabel": "append-only store", "pos": [820, 370], "size": [130, 50] },
+    { "id": "api", "type": "backend", "label": "FastAPI", "sublabel": "/v1 API", "pos": [660, 370], "size": [120, 54] },
+    { "id": "console", "type": "frontend", "label": "Review Console", "sublabel": "Signal Desk", "pos": [490, 370], "size": [140, 50] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Funnel (S1–S5)", "wraps": ["s1", "s2", "s3", "s4", "s5"] },
+    { "kind": "region", "label": "Storage & API", "wraps": ["sqlite", "api"] }
+  ],
+  "connections": [
+    { "id": "c1", "from": "ct-logs", "to": "ingest", "label": "entries" },
+    { "id": "c2", "from": "ingest", "to": "first-seen", "label": "new domains" },
+    { "id": "c3", "from": "first-seen", "to": "s1", "label": "unseen" },
+    { "id": "c4", "from": "s1", "to": "s2", "label": "brand-like" },
+    { "id": "c5", "from": "s2", "to": "s3", "label": "≤90d" },
+    { "id": "c6", "from": "s3", "to": "s4", "label": "resolves" },
+    { "id": "c7", "from": "s4", "to": "s5", "label": "probe OK", "variant": "dashed", "fromSide": "top", "toSide": "bottom" },
+    { "id": "c8", "from": "s5", "to": "sqlite", "label": "classified", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "c9", "from": "s4", "to": "sqlite", "label": "candidate", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "c10", "from": "sqlite", "to": "api", "label": "review queue" },
+    { "id": "c11", "from": "api", "to": "console", "label": "JSON + UI" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Discovery", "items": ["CT log entries within minutes of cert issuance", "First-seen baseline deduplicates new domains", "Cursor persists across restarts — no re-scan"] },
+    { "dot": "cyan", "title": "Funnel", "items": ["Five stages, each persists output", "S1–S4 run rules-only, no API key needed", "S5 LLM classification is optional"] },
+    { "dot": "amber", "title": "Review", "items": ["Single reviewer gets a short queue", "Full evidence chain per candidate", "Approve / defer / reject / blocklist"] }
+  ]
+}

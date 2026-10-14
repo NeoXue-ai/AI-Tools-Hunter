@@ -1,12 +1,16 @@
 # AI-Tools-Hunter
 
-Find AI tools the day they register a domain — usually weeks before they
-show up on Product Hunt or GitHub.
+Find AI tools the day they register a domain — by watching the
+certificate transparency logs, not by waiting for someone to post about
+them.
 
 Every AI tool needs a domain, and a domain needs a TLS certificate before
 it can serve anything. Certificate Transparency logs publish those
-certificates within minutes of issuance, which makes them the earliest
-public signal that a tool exists at all. AI-Tools-Hunter watches
+certificates within minutes of issuance. Product Hunt listings and GitHub
+stars happen when someone decides to market the tool — a human decision
+with no fixed timetable. CT log entries are mechanical: the certificate
+exists, so the entry appears. That makes them the earliest public signal
+that a tool exists at all. AI-Tools-Hunter watches
 configured public CT logs, keeps a first-seen baseline, and runs a
 five-stage funnel — static name signals, RDAP registration age, DNS
 presence, live HTTP probing, and optional LLM classification — so a
@@ -18,23 +22,29 @@ aggregator, no API keys. Any OpenAI-compatible LLM works.
 
 ## How it works
 
-```
-CT logs (configured RFC 6962 logs, default Cloudflare Nimbus 2026)
-  ▼
-first-seen baseline     ct_seen_domains — first sighting is the signal
-  ▼
-S1  static signals      domain-name shape: brand-like vs random spam
-  ▼
-S2  RDAP age            ≤30d → tier 1 · ≤90d → tier 2 · older → drop
-  ▼
-S3  DNS presence        does the domain resolve at all?
-  ▼
-S4  live probe          bounded HTTP probe, SSRF-guarded, evidence quotes
-  ▼
-S5  LLM classify        optional, fixed schema, evidence-restricted
-  ▼
-review queue            human review inbox
-```
+![AI-Tools-Hunter architecture](docs/architecture.svg)
+
+<details>
+<summary>Open the interactive diagram</summary>
+
+[`docs/architecture.html`](docs/architecture.html) — explore nodes, trace
+paths, and switch themes. Generated with
+[Archify](https://github.com/tt-a1i/archify).
+
+</details>
+
+The pipeline flows left to right:
+
+| Stage | What it does |
+|---|---|
+| CT logs | Poll configured RFC 6962 logs (default: Cloudflare Nimbus 2026) |
+| First-seen baseline | `ct_seen_domains` — first sighting is the signal |
+| S1 static signals | Domain-name shape: brand-like vs random spam |
+| S2 RDAP age | ≤30d → tier 1 · ≤90d → tier 2 · older → drop |
+| S3 DNS presence | Does the domain resolve at all? |
+| S4 live probe | Bounded HTTP probe, SSRF-guarded, evidence quotes |
+| S5 LLM classify | Optional, fixed schema, evidence-restricted |
+| Review queue | Human review inbox |
 
 Every stage's output is persisted, and the review console shows *why*
 a candidate is in the queue. Failed probes are retried automatically
