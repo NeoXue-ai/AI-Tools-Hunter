@@ -14,10 +14,10 @@
 
 | File | Change |
 | --- | --- |
-| `src/domainhunter/domain/verification.py` | New immutable strict-scan evidence model. |
-| `src/domainhunter/storage/sqlite.py` | New verification table plus review-state and first-seen readers. |
-| `src/domainhunter/ingest/ct_orchestrator.py` | Persist strict-filter evidence with created candidate versions; count strict rejections. |
-| `src/domainhunter/api.py` | Truthful API projections, reduced routes, and the new two-screen interface. |
+| `src/ai_tools_hunter/domain/verification.py` | New immutable strict-scan evidence model. |
+| `src/ai_tools_hunter/storage/sqlite.py` | New verification table plus review-state and first-seen readers. |
+| `src/ai_tools_hunter/ingest/ct_orchestrator.py` | Persist strict-filter evidence with created candidate versions; count strict rejections. |
+| `src/ai_tools_hunter/api.py` | Truthful API projections, reduced routes, and the new two-screen interface. |
 | `tests/test_candidate_verification.py` | Durable evidence storage tests. |
 | `tests/test_discovery_inbox_api.py` | Read-model, decision-state, and scan-result contract tests. |
 | `tests/test_discovery_inbox_ui.py` | Server-rendered UI contract tests. |
@@ -27,16 +27,16 @@
 ## Task 1: Add durable strict-scan verification facts
 
 **Files:**
-- Create: `src/domainhunter/domain/verification.py`
-- Modify: `src/domainhunter/storage/sqlite.py`
+- Create: `src/ai_tools_hunter/domain/verification.py`
+- Modify: `src/ai_tools_hunter/storage/sqlite.py`
 - Test: `tests/test_candidate_verification.py`
 
 - [ ] **Step 1: Write the failing round-trip test.**
 
     from datetime import UTC, datetime
-    from domainhunter.domain.candidates import CandidateOutcome, CandidateVersionDraft, Evidence, EvidenceType
-    from domainhunter.domain.verification import CandidateVerification
-    from domainhunter.storage.sqlite import SQLiteStore
+    from ai_tools_hunter.domain.candidates import CandidateOutcome, CandidateVersionDraft, Evidence, EvidenceType
+    from ai_tools_hunter.domain.verification import CandidateVerification
+    from ai_tools_hunter.storage.sqlite import SQLiteStore
 
     NOW = datetime(2026, 9, 3, tzinfo=UTC)
 
@@ -86,7 +86,7 @@
 
     Run: `.venv/bin/python -m pytest tests/test_candidate_verification.py -v`
 
-    Expected: `ModuleNotFoundError: No module named 'domainhunter.domain.verification'`.
+    Expected: `ModuleNotFoundError: No module named 'ai_tools_hunter.domain.verification'`.
 
 - [ ] **Step 3: Add the immutable domain model.**
 
@@ -139,14 +139,14 @@
 
     Expected: PASS.
 
-    git add src/domainhunter/domain/verification.py src/domainhunter/storage/sqlite.py tests/test_candidate_verification.py
+    git add src/ai_tools_hunter/domain/verification.py src/ai_tools_hunter/storage/sqlite.py tests/test_candidate_verification.py
     git commit -m "feat: persist candidate verification facts"
 
 ## Task 2: Capture evidence during strict CT discovery
 
 **Files:**
-- Modify: `src/domainhunter/ingest/ct_orchestrator.py`
-- Modify: `src/domainhunter/api.py`
+- Modify: `src/ai_tools_hunter/ingest/ct_orchestrator.py`
+- Modify: `src/ai_tools_hunter/api.py`
 - Test: `tests/test_discovery_api.py`
 
 - [ ] **Step 1: Write failing scan-result tests.**
@@ -213,14 +213,14 @@
 
     Expected: PASS.
 
-    git add src/domainhunter/ingest/ct_orchestrator.py src/domainhunter/api.py tests/test_discovery_api.py
+    git add src/ai_tools_hunter/ingest/ct_orchestrator.py src/ai_tools_hunter/api.py tests/test_discovery_api.py
     git commit -m "feat: expose strict discovery evidence and outcomes"
 
 ## Task 3: Add pending-only inbox and candidate-detail read models
 
 **Files:**
-- Modify: `src/domainhunter/storage/sqlite.py`
-- Modify: `src/domainhunter/api.py`
+- Modify: `src/ai_tools_hunter/storage/sqlite.py`
+- Modify: `src/ai_tools_hunter/api.py`
 - Create: `tests/test_discovery_inbox_api.py`
 
 - [ ] **Step 1: Write failing projection tests.**
@@ -332,13 +332,13 @@
 
     Expected: PASS.
 
-    git add src/domainhunter/storage/sqlite.py src/domainhunter/api.py tests/test_discovery_inbox_api.py tests/test_review_api.py
+    git add src/ai_tools_hunter/storage/sqlite.py src/ai_tools_hunter/api.py tests/test_discovery_inbox_api.py tests/test_review_api.py
     git commit -m "feat: add truthful discovery inbox projections"
 
 ## Task 4: Build the candidate inbox and strict-scan dialog
 
 **Files:**
-- Modify: `src/domainhunter/api.py`
+- Modify: `src/ai_tools_hunter/api.py`
 - Create: `tests/test_discovery_inbox_ui.py`
 
 - [ ] **Step 1: Write failing HTML contracts.**
@@ -372,7 +372,7 @@
       --focus: #1d4ed8;
     }
 
-    The only top-bar content is `DomainHunter`, `候选收件箱`, and a `扫描新网站` button. Remove metric strips, sparklines, global reviewer input, language toggles, and all four-page navigation.
+    The only top-bar content is `AI-Tools-Hunter`, `候选收件箱`, and a `扫描新网站` button. Remove metric strips, sparklines, global reviewer input, language toggles, and all four-page navigation.
 
 - [ ] **Step 4: Implement inbox behavior with no inferred facts.**
 
@@ -380,11 +380,11 @@
 
     Persist only client navigation state:
 
-    const stored = sessionStorage.getItem("domainhunter.inbox");
+    const stored = sessionStorage.getItem("ai_tools_hunter.inbox");
     const inboxState = stored ? JSON.parse(stored) : { query: "", scrollY: 0 };
     function persistInboxState(query) {
       sessionStorage.setItem(
-        "domainhunter.inbox",
+        "ai_tools_hunter.inbox",
         JSON.stringify({ query: query, scrollY: window.scrollY }),
       );
     }
@@ -399,13 +399,13 @@
 
     Expected: PASS.
 
-    git add src/domainhunter/api.py tests/test_discovery_inbox_ui.py
+    git add src/ai_tools_hunter/api.py tests/test_discovery_inbox_ui.py
     git commit -m "feat: build the discovery inbox"
 
 ## Task 5: Build the independent evidence page and decisions
 
 **Files:**
-- Modify: `src/domainhunter/api.py`
+- Modify: `src/ai_tools_hunter/api.py`
 - Modify: `tests/test_review_api.py`
 - Modify: `tests/test_discovery_inbox_ui.py`
 
@@ -459,7 +459,7 @@
         body: JSON.stringify({ request_id: crypto.randomUUID(), action, reason_tags: [] }),
       });
       if (response.ok) {
-        sessionStorage.setItem("domainhunter.flash", decisionCopy[action]);
+        sessionStorage.setItem("ai_tools_hunter.flash", decisionCopy[action]);
         location.assign("/");
         return;
       }
@@ -475,13 +475,13 @@
 
     Expected: PASS.
 
-    git add src/domainhunter/api.py tests/test_review_api.py tests/test_discovery_inbox_ui.py
+    git add src/ai_tools_hunter/api.py tests/test_review_api.py tests/test_discovery_inbox_ui.py
     git commit -m "feat: add independent candidate evidence review"
 
 ## Task 6: Retire dashboard routes and verify real data
 
 **Files:**
-- Modify: `src/domainhunter/api.py`
+- Modify: `src/ai_tools_hunter/api.py`
 - Modify: `tests/test_discovery_api.py`
 - Modify: `README.md`
 
@@ -514,13 +514,13 @@
 
     Run:
 
-    .venv/bin/domainhunter serve --database work/live-ct-strict-nimbus-final-root-20260903-05.db --host 127.0.0.1 --port 8034
+    .venv/bin/ai_tools_hunter serve --database work/live-ct-strict-nimbus-final-root-20260903-05.db --host 127.0.0.1 --port 8034
 
     With gstack browse, inspect `/` and its top candidate detail at desktop and 390px viewport. Confirm: the top candidate appears without a KPI strip, missing historical verification shows `未验证`, no browser console errors occur, scan failure differs from zero candidates, and the detail page never auto-advances.
 
 - [ ] **Step 5: Commit only after verification.**
 
-    git add src/domainhunter/api.py tests/test_discovery_api.py README.md
+    git add src/ai_tools_hunter/api.py tests/test_discovery_api.py README.md
     git commit -m "feat: retire dashboard routes for discovery inbox"
     git status --short
 

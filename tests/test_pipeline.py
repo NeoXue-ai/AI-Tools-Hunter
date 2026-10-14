@@ -3,11 +3,11 @@ from datetime import UTC, datetime
 
 import httpx
 
-from domainhunter.crawler.http_probe import HTTPProbe
-from domainhunter.domain.events import SourceEvent
-from domainhunter.domain.observations import OutcomeCode
-from domainhunter.pipeline import DomainHunterPipeline
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.crawler.http_probe import HTTPProbe
+from ai_tools_hunter.domain.events import SourceEvent
+from ai_tools_hunter.domain.observations import OutcomeCode
+from ai_tools_hunter.pipeline import AIToolsHunterPipeline
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 OBSERVED_AT = datetime(2026, 8, 16, tzinfo=UTC)
@@ -20,7 +20,7 @@ async def _public_resolver(hostname: str) -> tuple[str, ...]:
 def test_ingests_and_records_a_probe_with_a_retry_decision(tmp_path) -> None:
     html = "<title>Example AI</title><p>" + ("Useful product text. " * 60) + "</p>"
     transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -29,7 +29,7 @@ def test_ingests_and_records_a_probe_with_a_retry_decision(tmp_path) -> None:
             transport=transport,
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             assert pipeline.ingest_event(event) is True
             result = await pipeline.probe_domain("www.example.com", observed_at=OBSERVED_AT)
 
@@ -46,7 +46,7 @@ def test_ingests_and_records_a_probe_with_a_retry_decision(tmp_path) -> None:
 def test_probes_only_domains_due_under_the_persisted_retry_policy(tmp_path) -> None:
     html = "<title>Example AI</title><p>" + ("Useful product text. " * 60) + "</p>"
     transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -55,7 +55,7 @@ def test_probes_only_domains_due_under_the_persisted_retry_policy(tmp_path) -> N
             transport=transport,
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
 
             first_runs = await pipeline.probe_due_domains(observed_at=OBSERVED_AT)
@@ -77,7 +77,7 @@ def test_projects_a_successful_product_probe_into_a_cited_review_candidate(tmp_p
         "<p>" + ("Automate operations with AI workflows. " * 30) + "</p>"
     )
     transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -86,7 +86,7 @@ def test_projects_a_successful_product_probe_into_a_cited_review_candidate(tmp_p
             transport=transport,
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain("example.com", observed_at=OBSERVED_AT)
 
@@ -114,7 +114,7 @@ def test_strict_probe_keeps_observation_but_rejects_cross_root_redirect_candidat
             )
         return httpx.Response(200, text=html, request=request)
 
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "nimbus:1", "fresh-redirect.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -123,7 +123,7 @@ def test_strict_probe_keeps_observation_but_rejects_cross_root_redirect_candidat
             transport=httpx.MockTransport(responder),
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain(
                 "fresh-redirect.com",
@@ -145,7 +145,7 @@ def test_strict_probe_rejects_cross_root_canonical_candidate(tmp_path) -> None:
         '<meta name="description" content="AI product platform with a free trial">'
         "<p>" + ("Existing AI product content. " * 40) + "</p>"
     )
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "nimbus:canonical", "fresh-site.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -156,7 +156,7 @@ def test_strict_probe_rejects_cross_root_canonical_candidate(tmp_path) -> None:
             ),
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain(
                 "fresh-site.com",
@@ -188,7 +188,7 @@ def test_strict_probe_allows_same_root_www_redirect_candidate(tmp_path) -> None:
             )
         return httpx.Response(200, text=html, request=request)
 
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "nimbus:2", "fresh-site.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -197,7 +197,7 @@ def test_strict_probe_allows_same_root_www_redirect_candidate(tmp_path) -> None:
             transport=httpx.MockTransport(responder),
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain(
                 "fresh-site.com",
@@ -221,7 +221,7 @@ def test_probe_domain_records_canonical_and_internal_links_on_observation(tmp_pa
         "<a href=\"https://www.example.com/pricing\">Pricing</a>"
     )
     transport = httpx.MockTransport(lambda request: httpx.Response(200, text=html))
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -230,7 +230,7 @@ def test_probe_domain_records_canonical_and_internal_links_on_observation(tmp_pa
             transport=transport,
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain("www.example.com", observed_at=OBSERVED_AT)
 

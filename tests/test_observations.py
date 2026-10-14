@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from domainhunter.domain.observations import Observation, OutcomeCode
+from ai_tools_hunter.domain.observations import Observation, OutcomeCode
 
 
 OBSERVED_AT = datetime(2026, 8, 16, tzinfo=UTC)

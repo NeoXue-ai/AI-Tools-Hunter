@@ -1,5 +1,5 @@
-from domainhunter.crawler.l1_analysis import analyze_http_document
-from domainhunter.domain.observations import OutcomeCode
+from ai_tools_hunter.crawler.l1_analysis import analyze_http_document
+from ai_tools_hunter.domain.observations import OutcomeCode
 
 
 def test_extracts_product_metadata_from_successful_html() -> None:

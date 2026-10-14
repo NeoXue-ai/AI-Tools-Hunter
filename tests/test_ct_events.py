@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from domainhunter.ingest.ct_events import build_ct_events, extract_certificate_hostnames
+from ai_tools_hunter.ingest.ct_events import build_ct_events, extract_certificate_hostnames
 
 
 OBSERVED_AT = datetime(2026, 8, 16, tzinfo=UTC)

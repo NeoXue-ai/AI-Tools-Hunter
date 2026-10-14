@@ -1,1 +1,1 @@
-"""Test support package for DomainHunter."""
+"""Test support package for AI-Tools-Hunter."""

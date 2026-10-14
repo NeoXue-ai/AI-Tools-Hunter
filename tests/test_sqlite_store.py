@@ -1,26 +1,26 @@
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.events import SourceEvent
-from domainhunter.domain.observations import Observation, OutcomeCode
-from domainhunter.domain.review_priority import (
+from ai_tools_hunter.domain.events import SourceEvent
+from ai_tools_hunter.domain.observations import Observation, OutcomeCode
+from ai_tools_hunter.domain.review_priority import (
     ReviewPriorityInputs,
     calculate_review_priority,
 )
-from domainhunter.domain.reviews import ReasonTag, ReviewAction, build_review_decision
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.reviews import ReasonTag, ReviewAction, build_review_decision
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 OBSERVED_AT = datetime(2026, 8, 16, tzinfo=UTC)
 
 
 def test_appends_source_event_once_and_maps_it_to_the_registrable_domain(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "app.example.co.uk", OBSERVED_AT)
 
     assert store.append_source_event(event, hostname="app.example.co.uk") is True
@@ -31,7 +31,7 @@ def test_appends_source_event_once_and_maps_it_to_the_registrable_domain(tmp_pat
 
 def test_ct_source_event_atomically_records_its_first_seen_time(tmp_path) -> None:
     """A persisted CT event must never outlive its first-seen audit record."""
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "app.new-site.ai", OBSERVED_AT)
 
     assert store.append_source_event(event, hostname="app.new-site.ai") is True
@@ -40,7 +40,7 @@ def test_ct_source_event_atomically_records_its_first_seen_time(tmp_path) -> Non
 
 def test_store_rebuilds_ct_discovery_state_for_pre_queue_events(tmp_path) -> None:
     """Opening an upgraded database recovers CT events written before the work queue."""
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     event = SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT)
     assert store.append_source_event(event, hostname="new-site.ai") is True
@@ -60,7 +60,7 @@ def test_store_rebuilds_ct_discovery_state_for_pre_queue_events(tmp_path) -> Non
 
 
 def test_ct_discovery_work_uses_a_lease_and_can_be_retried(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT)
     store.append_source_event(event, hostname="new-site.ai")
 
@@ -90,7 +90,7 @@ def test_ct_discovery_work_uses_a_lease_and_can_be_retried(tmp_path) -> None:
 
 
 def test_appends_source_event_with_issuer_and_persists_it(tmp_path) -> None:
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     event = SourceEvent(
         "ct_log",
@@ -111,7 +111,7 @@ def test_appends_source_event_with_issuer_and_persists_it(tmp_path) -> None:
 
 
 def test_legacy_database_is_migrated_to_include_issuer_column(tmp_path) -> None:
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     connection = sqlite3.connect(database)
     try:
         connection.executescript(
@@ -162,7 +162,7 @@ def test_legacy_database_is_migrated_to_include_issuer_column(tmp_path) -> None:
 
 
 def test_appends_observations_without_overwriting_prior_results(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
     store.append_source_event(event, hostname="example.com")
     first = Observation("example.com", OutcomeCode.CONNECT_TIMEOUT, OBSERVED_AT, 1)
@@ -182,7 +182,7 @@ def test_appends_observations_without_overwriting_prior_results(tmp_path) -> Non
 
 
 def test_persists_canonical_url_and_internal_links_with_observations(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
     store.append_source_event(event, hostname="example.com")
     observation = Observation(
@@ -206,7 +206,7 @@ def test_persists_canonical_url_and_internal_links_with_observations(tmp_path) -
 
 
 def test_upgrades_legacy_observations_table_with_canonical_columns(tmp_path) -> None:
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
     store.append_source_event(event, hostname="example.com")
@@ -225,7 +225,7 @@ def test_upgrades_legacy_observations_table_with_canonical_columns(tmp_path) -> 
 
 
 def test_lists_domains_due_for_the_next_bounded_retry(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "argon:42", "example.com", OBSERVED_AT)
     store.append_source_event(event, hostname="example.com")
     observation = Observation(
@@ -241,7 +241,7 @@ def test_lists_domains_due_for_the_next_bounded_retry(tmp_path) -> None:
 
 
 def test_persists_source_cursor_for_restartable_polling(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
 
     assert store.get_source_cursor("ct_log") is None
     store.set_source_cursor("ct_log", "argon:43")
@@ -250,7 +250,7 @@ def test_persists_source_cursor_for_restartable_polling(tmp_path) -> None:
 
 
 def test_appends_candidate_versions_without_overwriting_model_evidence(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     candidate = store.create_candidate("app.example.com", created_at=OBSERVED_AT)
     replay = store.create_candidate("www.example.com", created_at=OBSERVED_AT.replace(hour=1))
     draft = CandidateVersionDraft(
@@ -282,7 +282,7 @@ def test_appends_candidate_versions_without_overwriting_model_evidence(tmp_path)
 
 
 def test_appends_review_decisions_idempotently_and_keeps_action_history(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     candidate = store.create_candidate("example.com", created_at=OBSERVED_AT)
     draft = CandidateVersionDraft(
         author_kind="rule",
@@ -313,7 +313,7 @@ def test_appends_review_decisions_idempotently_and_keeps_action_history(tmp_path
 
 
 def test_creates_database_in_missing_nested_directory(tmp_path) -> None:
-    nested = tmp_path / "level1" / "level2" / "domainhunter.db"
+    nested = tmp_path / "level1" / "level2" / "ai_tools_hunter.db"
 
     store = SQLiteStore(nested)
 
@@ -322,7 +322,7 @@ def test_creates_database_in_missing_nested_directory(tmp_path) -> None:
 
 
 def test_persists_review_priority_snapshots(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     candidate = store.create_candidate("example.com", created_at=OBSERVED_AT)
     priority = calculate_review_priority(
         ReviewPriorityInputs(
@@ -342,7 +342,7 @@ def test_persists_review_priority_snapshots(tmp_path) -> None:
 
 
 def test_mark_seen_tracks_first_seen_history(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     at = datetime(2026, 8, 16, tzinfo=UTC)
     later = datetime(2026, 8, 17, tzinfo=UTC)
 
@@ -359,7 +359,7 @@ def test_mark_seen_tracks_first_seen_history(tmp_path) -> None:
 
 
 def test_filter_new_returns_only_never_seen(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     at = datetime(2026, 8, 16, tzinfo=UTC)
     store.mark_seen(("old.com",), at=at, source="ct")
 
@@ -368,7 +368,7 @@ def test_filter_new_returns_only_never_seen(tmp_path) -> None:
 
 
 def test_filter_new_empty_and_unknown(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     assert store.filter_new(()) == ()
     assert store.filter_new(("x.com", "y.com")) == ("x.com", "y.com")
     assert store.seen_domain_count() == 0
@@ -381,7 +381,7 @@ def test_due_ct_discovery_work_count_excludes_future_retries(tmp_path) -> None:
     single backed-off root kept it spinning forever and the next sweep never
     started. Pending stays high; due must drop to zero.
     """
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     store.append_source_event(
         SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
         hostname="new-site.ai",
@@ -401,7 +401,7 @@ def test_due_ct_discovery_work_count_excludes_future_retries(tmp_path) -> None:
 
 
 def test_due_ct_discovery_work_count_ignores_a_live_lease(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     store.append_source_event(
         SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
         hostname="new-site.ai",
@@ -416,7 +416,7 @@ def test_due_ct_discovery_work_count_ignores_a_live_lease(tmp_path) -> None:
 
 
 def test_due_ct_discovery_work_count_ignores_completed_roots(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     store.append_source_event(
         SourceEvent("ct_log", "argon:42", "new-site.ai", OBSERVED_AT),
         hostname="new-site.ai",
@@ -466,7 +466,7 @@ def test_append_source_events_batches_the_same_rows_as_the_single_path(tmp_path)
 
 
 def test_append_source_events_is_idempotent_across_batches(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     records = (
         (SourceEvent("ct_log", "argon:1", "a-batch.com", OBSERVED_AT), "a-batch.com"),
         (SourceEvent("ct_log", "argon:2", "b-batch.com", OBSERVED_AT), "b-batch.com"),
@@ -479,7 +479,7 @@ def test_append_source_events_is_idempotent_across_batches(tmp_path) -> None:
 
 def test_connection_enables_wal_and_normal_synchronous(tmp_path) -> None:
     """journal_mode=delete + synchronous=FULL made every commit fsync twice."""
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     with store._connection() as connection:
         journal = connection.execute("PRAGMA journal_mode").fetchone()[0]
         synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
@@ -497,7 +497,7 @@ def test_repeat_sightings_of_a_known_root_are_not_recorded_again(tmp_path) -> No
     bought index pages and disk without buying information. A single busy root
     appears in thousands of certificates a day.
     """
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     first = SourceEvent("ct_log", "argon:1", "example.com", OBSERVED_AT)
     second = SourceEvent("ct_log", "argon:2", "www.example.com", OBSERVED_AT)
 
@@ -525,7 +525,7 @@ def test_batched_page_records_one_event_per_new_root(tmp_path) -> None:
     Distinct ``source_event_id`` values, so the idempotency key cannot be
     what rejects the middle record — only the already-recorded root can.
     """
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     records = (
         (SourceEvent("ct_log", "argon:1", "a.example.com", OBSERVED_AT), "a.example.com"),
         (SourceEvent("ct_log", "argon:2", "b.example.com", OBSERVED_AT), "b.example.com"),
@@ -538,7 +538,7 @@ def test_batched_page_records_one_event_per_new_root(tmp_path) -> None:
 
 def test_non_ct_sources_keep_every_event(tmp_path) -> None:
     """The amplification guard is CT-specific: other sources are not deduped."""
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     first = SourceEvent("manual", "m:1", "example.com", OBSERVED_AT)
     second = SourceEvent("manual", "m:2", "www.example.com", OBSERVED_AT)
 

@@ -1,7 +1,7 @@
-# DomainHunter Review Console — Redesign Spec
+# AI-Tools-Hunter Review Console — Redesign Spec
 
 **Status:** v2 — structural redesign (supersedes v1)
-**Scope:** visual + interaction redesign of `_REVIEW_CONSOLE_HTML` in `src/domainhunter/api.py`
+**Scope:** visual + interaction redesign of `_REVIEW_CONSOLE_HTML` in `src/ai_tools_hunter/api.py`
 **Audience:** human reviewers using the local loopback console at `http://127.0.0.1:8000/`
 
 ---
@@ -211,7 +211,7 @@ v2 推翻这条骨架，按仪表盘应有的视觉权重重排：
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ ◉ DomainHunter · loopback        ● live         [中] [EN]   reviewer ▢  │
+│ ◉ AI-Tools-Hunter · loopback        ● live         [中] [EN]   reviewer ▢  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 

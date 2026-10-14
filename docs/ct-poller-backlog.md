@@ -6,7 +6,7 @@
 
 - [x] **A1 取消未声明的外部监视器依赖**（2026-09-04）：`discover` 直接复用项目内的 `CTLogFetcher` + `CTIngestOrchestrator`。无需本机 patch，也不会因重新安装而丢失采集能力。
 - [x] **A2 有界运行的故障可见性**（2026-09-04）：CT 源失败会保留异常栈；`discover --max-rounds` 会输出失败计数与原因，并以非零状态退出。
-- [x] **A3 lag 监控**：每日志落后量监控，防高吞吐日志永久落后。`src/domainhunter/scheduler/lag_monitor.py` + 测试。
+- [x] **A3 lag 监控**：每日志落后量监控，防高吞吐日志永久落后。`src/ai_tools_hunter/scheduler/lag_monitor.py` + 测试。
 - [x] **first-seen 基线（增量版）**：`ct_seen_domains` 表（domain/first_seen_at/first_source）+ `mark_seen`/`filter_new`/`is_seen` + CLI `filter-enrich --fresh-only`。重复输入自动跳过，不浪费 RDAP/探测/LLM 成本。验证：12 域名首跑全 fresh，二跑全 seen（0 处理）。
 
 ## 待办（以后搞）

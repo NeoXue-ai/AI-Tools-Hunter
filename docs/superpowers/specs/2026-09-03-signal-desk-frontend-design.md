@@ -1,13 +1,13 @@
-# DomainHunter Signal Desk — Full Frontend Design
+# AI-Tools-Hunter Signal Desk — Full Frontend Design
 
 **Status:** superseded on 2026-09-03 by `2026-09-03-discovery-inbox-product-design.md`
 **Date:** 2026-09-03
 **Scope:** complete redesign of the local review console: Queue, Review, Discovery, and Ops
-**Implementation surface:** `src/domainhunter/api.py` HTML, CSS, and client-side scripts; existing HTTP endpoints and scoring rules remain unchanged.
+**Implementation surface:** `src/ai_tools_hunter/api.py` HTML, CSS, and client-side scripts; existing HTTP endpoints and scoring rules remain unchanged.
 
 ## 1. Product outcome
 
-DomainHunter exists to surface genuinely new websites. Its interface must make the best verified candidate impossible to overlook while preserving the ability to audit every supporting signal.
+AI-Tools-Hunter exists to surface genuinely new websites. Its interface must make the best verified candidate impossible to overlook while preserving the ability to audit every supporting signal.
 
 The current console presents all queued results as visually equivalent, dense rows. In the verified Nimbus run this leaves one publishable candidate (`limitlessrouter.com`, score 0.71) almost indistinguishable from 36 lower-confidence leads. The redesign makes **decision readiness**, not raw record volume, the primary organising principle.
 
@@ -23,7 +23,7 @@ The current console presents all queued results as visually equivalent, dense ro
 
 ### Navigation and hierarchy
 
-- A sticky top bar contains the DomainHunter wordmark, environment label, navigation, current scan status, language toggle, and reviewer ID.
+- A sticky top bar contains the AI-Tools-Hunter wordmark, environment label, navigation, current scan status, language toggle, and reviewer ID.
 - Primary navigation: **Queue**, **Review**, **Discovery**, **Ops**. Queue is the default route. Review links to the current selected candidate, and is disabled only when no candidate is available.
 - The shell uses one spacious content column, capped at a readable desktop width. Page-specific tools appear in a contextual header instead of the global navigation.
 - On widths below 900px, navigation collapses to a compact menu while the current page title remains visible.

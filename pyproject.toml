@@ -1,5 +1,5 @@
 [project]
-name = "domainhunter"
+name = "ai-tools-hunter"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-domainhunter = "domainhunter.cli:main"
+ai-tools-hunter = "ai_tools_hunter.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=9.0"]

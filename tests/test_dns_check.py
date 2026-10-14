@@ -2,7 +2,7 @@
 
 import socket
 
-from domainhunter.filter.dns_check import check_dns
+from ai_tools_hunter.filter.dns_check import check_dns
 
 
 def test_resolving_domain_has_a(monkeypatch) -> None:

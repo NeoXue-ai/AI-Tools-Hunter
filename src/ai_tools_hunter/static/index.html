@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="AI-Tools-Hunter — catch AI tools the day they register a domain, surfaced from certificate transparency logs." />
+    <title>AI-Tools-Hunter</title>
+    <script>
+      // Resolve the palette before first paint so a dark-mode reload never
+      // flashes white. Mirrors the key and fallback used in `useTheme`.
+      (function () {
+        try {
+          var stored = localStorage.getItem("dh.theme");
+          var dark =
+            stored === "dark" ||
+            (stored !== "light" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) {
+            document.documentElement.classList.add("dark");
+            document.documentElement.style.colorScheme = "dark";
+          }
+        } catch (error) {
+          /* storage unavailable — light theme is a fine default */
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-B8QlRqxl.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-2yFpvDGp.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

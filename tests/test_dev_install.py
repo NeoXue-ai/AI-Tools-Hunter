@@ -15,19 +15,19 @@ def _scaffold(repository: Path) -> None:
     (repository / "pyproject.toml").write_text(
         """\
 [project]
-name = "domainhunter"
+name = "ai_tools_hunter"
 version = "0.0.0"
 requires-python = ">=3.12"
 
 [project.scripts]
-domainhunter = "domainhunter.cli:main"
+ai_tools_hunter = "ai_tools_hunter.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 """
     )
-    package = repository / "src" / "domainhunter"
+    package = repository / "src" / "ai_tools_hunter"
     package.mkdir(parents=True, exist_ok=True)
     (package / "__init__.py").write_text('__version__ = "0.0.0"\n')
     (package / "cli.py").write_text(
@@ -60,7 +60,7 @@ def test_dev_install_uses_the_directory_containing_the_script_as_the_project_roo
     assert "ok:" in result.stdout
 
     cli_result = subprocess.run(
-        [str(repository / ".venv" / "bin" / "domainhunter"), "first-pass"],
+        [str(repository / ".venv" / "bin" / "ai_tools_hunter"), "first-pass"],
         cwd=repository,
         capture_output=True,
         text=True,
@@ -77,10 +77,10 @@ def test_dev_install_uses_the_directory_containing_the_script_as_the_project_roo
             ],
             text=True,
         ).strip()
-        subprocess.run(["chflags", "hidden", f"{site_packages}/domainhunter.pth"], check=True)
+        subprocess.run(["chflags", "hidden", f"{site_packages}/ai_tools_hunter.pth"], check=True)
 
         recovered_result = subprocess.run(
-            [str(repository / ".venv" / "bin" / "domainhunter"), "recovered"],
+            [str(repository / ".venv" / "bin" / "ai_tools_hunter"), "recovered"],
             cwd=repository,
             capture_output=True,
             text=True,
@@ -92,7 +92,7 @@ def test_dev_install_uses_the_directory_containing_the_script_as_the_project_roo
         assert reinstall_result.returncode == 0, reinstall_result.stderr
 
         refreshed_result = subprocess.run(
-            [str(repository / ".venv" / "bin" / "domainhunter"), "refreshed"],
+            [str(repository / ".venv" / "bin" / "ai_tools_hunter"), "refreshed"],
             cwd=repository,
             capture_output=True,
             text=True,
@@ -110,7 +110,7 @@ def test_dev_install_falls_back_to_pip_when_uv_cannot_build(tmp_path: Path) -> N
     project path contains a space. pip runs the backend in a subprocess and is
     unaffected, so the script retries with pip.
     """
-    repository = tmp_path / "domainhunter"
+    repository = tmp_path / "ai_tools_hunter"
     _scaffold(repository)
     subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=repository, check=True)
 
@@ -135,7 +135,7 @@ def test_dev_install_falls_back_to_pip_when_uv_cannot_build(tmp_path: Path) -> N
     assert "ok:" in result.stdout
 
     cli_result = subprocess.run(
-        [str(repository / ".venv" / "bin" / "domainhunter"), "after-fallback"],
+        [str(repository / ".venv" / "bin" / "ai_tools_hunter"), "after-fallback"],
         cwd=repository,
         capture_output=True,
         text=True,

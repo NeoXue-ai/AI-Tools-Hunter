@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from domainhunter.filter.rdap_age import (
+from ai_tools_hunter.filter.rdap_age import (
     MemoryCache,
     Registration,
     classify_age,

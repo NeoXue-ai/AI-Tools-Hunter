@@ -9,15 +9,15 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from domainhunter.api import create_app
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.api import create_app
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.reviews import ReviewAction, build_review_decision
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.reviews import ReviewAction, build_review_decision
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 NOW = datetime(2026, 8, 16, tzinfo=UTC)

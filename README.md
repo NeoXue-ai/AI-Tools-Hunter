@@ -1,14 +1,17 @@
-# DomainHunter
+# AI-Tools-Hunter
 
-Find newborn domains the moment they first appear in Certificate
-Transparency logs.
+Find AI tools the day they register a domain — usually weeks before they
+show up on Product Hunt or GitHub.
 
-DomainHunter watches configured public CT logs, keeps a first-seen
-baseline, and runs a five-stage funnel — static name signals, RDAP
-registration age, DNS presence, live HTTP probing, and optional LLM
-classification — so a single reviewer gets a short queue of *actually
-new* domains that look like real products, each with a full evidence
-chain.
+Every AI tool needs a domain, and a domain needs a TLS certificate before
+it can serve anything. Certificate Transparency logs publish those
+certificates within minutes of issuance, which makes them the earliest
+public signal that a tool exists at all. AI-Tools-Hunter watches
+configured public CT logs, keeps a first-seen baseline, and runs a
+five-stage funnel — static name signals, RDAP registration age, DNS
+presence, live HTTP probing, and optional LLM classification — so a
+single reviewer gets a short queue of *actually new* domains that look
+like real AI products, each with a full evidence chain.
 
 Small and dependency-light: pure HTTP, no WebSocket, no third-party
 aggregator, no API keys. Any OpenAI-compatible LLM works.
@@ -40,8 +43,8 @@ a candidate is in the queue. Failed probes are retried automatically
 ## Quickstart
 
 ```bash
-git clone https://github.com/NeoXue-ai/domainhunter.git
-cd domainhunter
+git clone https://github.com/NeoXue-ai/AI-Tools-Hunter.git
+cd AI-Tools-Hunter
 python3 -m venv .venv
 .venv/bin/pip install -e .          # Windows: .venv\Scripts\pip install -e .
 .venv/bin/python -m pytest -q       # test suite
@@ -59,18 +62,18 @@ Foreground running is the same everywhere: start the command, it runs until
 There are four:
 
 ```bash
-domainhunter init --database ./domainhunter.db        # create/open the DB
+ai-tools-hunter init --database ./ai-tools-hunter.db        # create/open the DB
 
-domainhunter start    --database ./domainhunter.db    # continuous discovery
-domainhunter serve  --database ./domainhunter.db      # review inbox UI
-domainhunter status --database ./domainhunter.db      # known + due domains
+ai-tools-hunter start    --database ./ai-tools-hunter.db    # continuous discovery
+ai-tools-hunter serve  --database ./ai-tools-hunter.db      # review inbox UI
+ai-tools-hunter status --database ./ai-tools-hunter.db      # known + due domains
 ```
 
 ### Continuous discovery
 
 ```bash
-domainhunter start \
-  --database ./domainhunter.db \
+ai-tools-hunter start \
+  --database ./ai-tools-hunter.db \
   --entries 500000 \
   --provider openai-compatible --base-url "https://api.deepseek.com" \
   --token-env DEEPSEEK_TOKEN --model "deepseek-chat"
@@ -92,7 +95,7 @@ fenced or tail blocks, `base_url` normalized with or without `/v1`).
 ### Review inbox
 
 ```bash
-domainhunter serve --database ./domainhunter.db
+ai-tools-hunter serve --database ./ai-tools-hunter.db
 # open http://127.0.0.1:8000/
 ```
 
@@ -145,12 +148,12 @@ where it stopped and never re-scans.
 ### Linux — systemd
 
 ```ini
-# /etc/systemd/system/domainhunter.service
+# /etc/systemd/system/ai-tools-hunter.service
 [Unit]
 After=network-online.target
 
 [Service]
-ExecStart=/opt/domainhunter/.venv/bin/domainhunter start --database /var/lib/domainhunter/dh.db
+ExecStart=/opt/ai-tools-hunter/.venv/bin/ai-tools-hunter start --database /var/lib/ai-tools-hunter/dh.db
 Restart=always
 RestartSec=10
 
@@ -160,14 +163,14 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now domainhunter    # start + auto-start on boot
-sudo systemctl stop domainhunter            # the off switch
-journalctl -u domainhunter -f               # logs
+sudo systemctl enable --now ai-tools-hunter    # start + auto-start on boot
+sudo systemctl stop ai-tools-hunter            # the off switch
+journalctl -u ai-tools-hunter -f               # logs
 ```
 
 ### macOS — launchd
 
-Save as `~/Library/LaunchAgents/ai.neoxue.domainhunter.plist` (absolute paths
+Save as `~/Library/LaunchAgents/ai.neoxue.ai-tools-hunter.plist` (absolute paths
 required):
 
 ```xml
@@ -175,23 +178,23 @@ required):
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>ai.neoxue.domainhunter</string>
+  <key>Label</key><string>ai.neoxue.ai-tools-hunter</string>
   <key>ProgramArguments</key><array>
-    <string>/Users/YOU/domainhunter/.venv/bin/domainhunter</string>
+    <string>/Users/YOU/ai-tools-hunter/.venv/bin/ai-tools-hunter</string>
     <string>start</string>
     <string>--database</string>
-    <string>/Users/YOU/domainhunter/dh.db</string>
+    <string>/Users/YOU/ai-tools-hunter/dh.db</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/YOU/domainhunter/start.log</string>
-  <key>StandardErrorPath</key><string>/Users/YOU/domainhunter/start.err.log</string>
+  <key>StandardOutPath</key><string>/Users/YOU/ai-tools-hunter/start.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/ai-tools-hunter/start.err.log</string>
 </dict></plist>
 ```
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.neoxue.domainhunter.plist  # on
-launchctl bootout gui/$(id -u)/ai.neoxue.domainhunter                                 # off
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.neoxue.ai-tools-hunter.plist  # on
+launchctl bootout gui/$(id -u)/ai.neoxue.ai-tools-hunter                                 # off
 ```
 
 Laptop caveat: closing the lid sleeps the Mac and pauses discovery; disable
@@ -200,21 +203,21 @@ auto-sleep if you need true 24h coverage.
 ### Windows — Task Scheduler (built-in) or NSSM
 
 ```bat
-schtasks /Create /TN DomainHunter /SC ONSTART /RU SYSTEM ^
-  /TR "C:\domainhunter\.venv\Scripts\domainhunter.exe start --database C:\domainhunter\db\dh.db"
+schtasks /Create /TN AI-Tools-Hunter /SC ONSTART /RU SYSTEM ^
+  /TR "C:\ai-tools-hunter\.venv\Scripts\ai-tools-hunter.exe start --database C:\ai-tools-hunter\db\dh.db"
 ```
 
 For restart-on-failure, open `taskschd.msc` and set "restart on failure" in
 the task's settings — or install [NSSM](https://nssm.cc) for a real Windows
-service with `nssm install DomainHunter <exe> <args>` and `nssm start/stop`
+service with `nssm install AI-Tools-Hunter <exe> <args>` and `nssm start/stop`
 as the switch.
 
 ## Project layout
 
 ```
-src/domainhunter/
+src/ai_tools_hunter/
   api.py        — FastAPI routes
-  cli.py        — `domainhunter` entry point (init/status/start/serve)
+  cli.py        — `ai-tools-hunter` entry point (init/status/start/serve)
   pipeline.py   — S4 probe + retry policy + candidate creation
   crawler/      — HTTP probe, L1 content analysis, SSRF-safe transport
   filter/       — S1 static signals, S2 RDAP age, S3 DNS, funnel

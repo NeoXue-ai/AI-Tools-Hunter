@@ -2,9 +2,9 @@
 
 from fastapi.testclient import TestClient
 
-from domainhunter.api import discovery
-from domainhunter.api import create_app
-from domainhunter.ingest.ct_orchestrator import CTIngestRunSummary
+from ai_tools_hunter.api import discovery
+from ai_tools_hunter.api import create_app
+from ai_tools_hunter.ingest.ct_orchestrator import CTIngestRunSummary
 
 
 def test_discovery_overview_empty(tmp_path) -> None:
@@ -80,7 +80,7 @@ def test_web_discovery_requires_verified_age_and_dns_before_l1(
     monkeypatch.setattr(discovery, "CTLogFetcher", _FakeFetcher)
     monkeypatch.setattr(discovery, "CTPoller", _FakePoller)
     monkeypatch.setattr(discovery, "HTTPProbe", _FakeProbeContext)
-    monkeypatch.setattr(discovery, "DomainHunterPipeline", _FakePipeline)
+    monkeypatch.setattr(discovery, "AIToolsHunterPipeline", _FakePipeline)
     monkeypatch.setattr(discovery, "CTIngestOrchestrator", _CapturingOrchestrator)
 
     response = TestClient(create_app(tmp_path / "strict.db")).post(
@@ -150,7 +150,7 @@ def test_web_discovery_calls_an_empty_strict_run_no_candidates(monkeypatch, tmp_
     monkeypatch.setattr(discovery, "CTLogFetcher", _FakeFetcher)
     monkeypatch.setattr(discovery, "CTPoller", _FakePoller)
     monkeypatch.setattr(discovery, "HTTPProbe", _FakeProbeContext)
-    monkeypatch.setattr(discovery, "DomainHunterPipeline", _FakePipeline)
+    monkeypatch.setattr(discovery, "AIToolsHunterPipeline", _FakePipeline)
     monkeypatch.setattr(discovery, "CTIngestOrchestrator", _EmptyOrchestrator)
 
     response = TestClient(create_app(tmp_path / "empty.db")).post(
@@ -212,7 +212,7 @@ def test_web_discovery_reports_queued_work_and_partial_source_failure(
     monkeypatch.setattr(discovery, "CTLogFetcher", _FakeFetcher)
     monkeypatch.setattr(discovery, "CTPoller", _FakePoller)
     monkeypatch.setattr(discovery, "HTTPProbe", _FakeProbeContext)
-    monkeypatch.setattr(discovery, "DomainHunterPipeline", _FakePipeline)
+    monkeypatch.setattr(discovery, "AIToolsHunterPipeline", _FakePipeline)
     monkeypatch.setattr(discovery, "CTIngestOrchestrator", _QueuedOrchestrator)
 
     response = TestClient(create_app(tmp_path / "queued.db")).post(

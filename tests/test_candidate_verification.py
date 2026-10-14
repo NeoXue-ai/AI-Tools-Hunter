@@ -1,13 +1,13 @@
 from datetime import UTC, datetime
 
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.verification import CandidateVerification
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.verification import CandidateVerification
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 NOW = datetime(2026, 9, 3, tzinfo=UTC)

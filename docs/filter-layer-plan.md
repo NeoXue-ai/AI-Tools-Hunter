@@ -50,7 +50,7 @@
 - 无解析或解析暂未就绪 = 保留重试，不创建候选。
 
 ### S4 L1 HTTP 探测（已有）
-- 复用 `DomainHunterPipeline.probe_domain`。
+- 复用 `AIToolsHunterPipeline.probe_domain`。
 
 ### S5 AI 判型（可选）
 - 规则预筛（`build_rule_candidate_draft`）+ 可选 LLM 判型（MiniMax/OpenAI-compatible）。
@@ -71,14 +71,14 @@
 
 ## 实现记录（2026-09-01）
 
-- `src/domainhunter/filter/static_signals.py` — S1 域名特征打分（长度/单词/TLD/随机串指纹），`score_domain()` + `batch_registration_flag()`
-- `src/domainhunter/filter/rdap_age.py` — S2 RDAP 查询 + 双桶分级（`classify_age`）+ MemoryCache
-- `src/domainhunter/filter/dns_check.py` — S3 DNS A 记录探测（标准库 socket，零依赖）
-- `src/domainhunter/filter/pipeline.py` — 漏斗编排 `FilterPipeline`，输出带证据链的 `FilteredCandidate`；`run_with_probe()` 支持 S4 探测
-- `src/domainhunter/filter/enrich.py` — S5 自动化：`run_batch()` 把 S1→S5 全链路串起来（filter → source event 入库 → probe → LLM 判型 → rule+llm 双版本落库），单域名容错（坏域名不中断 batch）
-- CLI：`domainhunter filter --input domains.json [--tier1-days 30]`（默认严格 RDAP/DNS）
-- CLI：`domainhunter filter-probe --database db --input domains.json` — 漏斗 + S4 真实探测（候选先以 `filter` source event 入库，再 L1 探测 + 规则判型）
-- CLI：`domainhunter filter-enrich --database db --input domains.json --provider openai-compatible --base-url ... --token ... --model ...`（或 `--provider mock`）— S5 全链路
+- `src/ai_tools_hunter/filter/static_signals.py` — S1 域名特征打分（长度/单词/TLD/随机串指纹），`score_domain()` + `batch_registration_flag()`
+- `src/ai_tools_hunter/filter/rdap_age.py` — S2 RDAP 查询 + 双桶分级（`classify_age`）+ MemoryCache
+- `src/ai_tools_hunter/filter/dns_check.py` — S3 DNS A 记录探测（标准库 socket，零依赖）
+- `src/ai_tools_hunter/filter/pipeline.py` — 漏斗编排 `FilterPipeline`，输出带证据链的 `FilteredCandidate`；`run_with_probe()` 支持 S4 探测
+- `src/ai_tools_hunter/filter/enrich.py` — S5 自动化：`run_batch()` 把 S1→S5 全链路串起来（filter → source event 入库 → probe → LLM 判型 → rule+llm 双版本落库），单域名容错（坏域名不中断 batch）
+- CLI：`ai_tools_hunter filter --input domains.json [--tier1-days 30]`（默认严格 RDAP/DNS）
+- CLI：`ai_tools_hunter filter-probe --database db --input domains.json` — 漏斗 + S4 真实探测（候选先以 `filter` source event 入库，再 L1 探测 + 规则判型）
+- CLI：`ai_tools_hunter filter-enrich --database db --input domains.json --provider openai-compatible --base-url ... --token ... --model ...`（或 `--provider mock`）— S5 全链路
 - 测试：+47 个新测试（static_signals 12 / rdap_age 13 / dns_check 5 / pipeline 10 / enrich 3 / CLI 4）
 
 ### S5 LLM 兼容性修复（真实 MiniMax-M3 验证）

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from domainhunter.domain.reviews import ReasonTag, ReviewAction, build_review_decision
+from ai_tools_hunter.domain.reviews import ReasonTag, ReviewAction, build_review_decision
 
 
 NOW = datetime(2026, 8, 16, tzinfo=UTC)

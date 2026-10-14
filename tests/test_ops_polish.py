@@ -16,17 +16,17 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from domainhunter.api import create_app
-from domainhunter.crawler.http_probe import HostRateLimiter
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.api import create_app
+from ai_tools_hunter.crawler.http_probe import HostRateLimiter
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.reviews import ReviewAction, build_review_decision
-from domainhunter.domain.review_priority import ReviewPriorityInputs, calculate_review_priority
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.reviews import ReviewAction, build_review_decision
+from ai_tools_hunter.domain.review_priority import ReviewPriorityInputs, calculate_review_priority
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 OBSERVED_AT = datetime(2026, 8, 17, tzinfo=UTC)
@@ -62,7 +62,7 @@ def _seed_candidate(store: SQLiteStore, hostname: str = "example.com"):
 
 def test_concurrent_decision_conflict_returns_409(tmp_path) -> None:
     """Two reviewers with different request_ids on the same version → 409."""
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     candidate, version = _seed_candidate(store)
     client = TestClient(create_app(database))
@@ -94,7 +94,7 @@ def test_concurrent_decision_conflict_returns_409(tmp_path) -> None:
 
 def test_concurrent_decision_same_request_id_is_idempotent(tmp_path) -> None:
     """Replay with the same request_id must remain 200, not 409."""
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     candidate, version = _seed_candidate(store)
     client = TestClient(create_app(database))
@@ -121,7 +121,7 @@ def test_concurrent_decision_same_request_id_is_idempotent(tmp_path) -> None:
 
 def test_revoked_decision_does_not_block_new_decision(tmp_path) -> None:
     """Once the active decision is revoked, a fresh request_id may decide again."""
-    database = tmp_path / "domainhunter.db"
+    database = tmp_path / "ai_tools_hunter.db"
     store = SQLiteStore(database)
     candidate, version = _seed_candidate(store)
     client = TestClient(create_app(database))

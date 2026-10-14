@@ -2,8 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from domainhunter.domain.observations import OutcomeCode
-from domainhunter.domain.retry_policy import decide_next_action, network_retry_delay
+from ai_tools_hunter.domain.observations import OutcomeCode
+from ai_tools_hunter.domain.retry_policy import decide_next_action, network_retry_delay
 
 
 NOW = datetime(2026, 8, 16, tzinfo=UTC)

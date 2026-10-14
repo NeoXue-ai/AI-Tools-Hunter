@@ -4,17 +4,17 @@ from typing import Self
 
 import pytest
 
-from domainhunter import cli
-from domainhunter.api import create_app
-from domainhunter.domain.candidates import (
+from ai_tools_hunter import cli
+from ai_tools_hunter.api import create_app
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.reviews import ReviewAction, build_review_decision
-from domainhunter.ingest.ct_poller import CTCertificate, CTPage
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.reviews import ReviewAction, build_review_decision
+from ai_tools_hunter.ingest.ct_poller import CTCertificate, CTPage
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 def test_cli_serves_the_review_api_from_an_explicit_database(tmp_path, monkeypatch) -> None:
@@ -32,7 +32,7 @@ def test_cli_serves_the_review_api_from_an_explicit_database(tmp_path, monkeypat
             [
                 "serve",
                 "--database",
-                str(tmp_path / "domainhunter.db"),
+                str(tmp_path / "ai_tools_hunter.db"),
                 "--host",
                 "127.0.0.1",
                 "--port",

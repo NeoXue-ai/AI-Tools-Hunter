@@ -1,6 +1,6 @@
 import pytest
 
-from domainhunter.domain.normalization import InvalidHostname, normalize_hostname
+from ai_tools_hunter.domain.normalization import InvalidHostname, normalize_hostname
 
 
 @pytest.mark.parametrize(

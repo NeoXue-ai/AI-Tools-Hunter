@@ -1,14 +1,14 @@
 from datetime import UTC, datetime
 
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.review_queue import ReviewQueueItem
-from domainhunter.domain.review_priority import ReviewPriorityInputs, calculate_review_priority
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.domain.review_queue import ReviewQueueItem
+from ai_tools_hunter.domain.review_priority import ReviewPriorityInputs, calculate_review_priority
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 
 OBSERVED_AT = datetime(2026, 8, 16, tzinfo=UTC)
@@ -26,7 +26,7 @@ def _draft(domain: str) -> CandidateVersionDraft:
 
 
 def test_orders_review_queue_by_latest_persisted_priority(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     lower = store.create_candidate("lower-example.com", created_at=OBSERVED_AT)
     higher = store.create_candidate("higher-example.com", created_at=OBSERVED_AT)
     for candidate in (lower, higher):

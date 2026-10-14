@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from domainhunter.network_safety import (
+from ai_tools_hunter.network_safety import (
     BlockedNetworkTarget,
     resolve_public_addresses,
     validate_public_addresses,

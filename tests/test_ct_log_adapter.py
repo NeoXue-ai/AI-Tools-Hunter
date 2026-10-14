@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
-from domainhunter.ingest.ct_log_adapter import (
+from ai_tools_hunter.ingest.ct_log_adapter import (
     DEFAULT_LOG,
     CTLogFetcher,
     CTLogTarget,

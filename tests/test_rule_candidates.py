@@ -1,6 +1,6 @@
-from domainhunter.crawler.l1_analysis import analyze_http_document
-from domainhunter.domain.candidates import CandidateOutcome, EvidenceType
-from domainhunter.domain.rule_candidates import build_rule_candidate_draft
+from ai_tools_hunter.crawler.l1_analysis import analyze_http_document
+from ai_tools_hunter.domain.candidates import CandidateOutcome, EvidenceType
+from ai_tools_hunter.domain.rule_candidates import build_rule_candidate_draft
 
 
 def test_builds_a_publishable_rule_draft_from_strong_product_metadata() -> None:

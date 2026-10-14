@@ -6,15 +6,15 @@ from datetime import UTC, datetime
 
 import httpx
 
-from domainhunter.crawler.http_probe import HTTPProbe
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.crawler.http_probe import HTTPProbe
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,
     EvidenceType,
 )
-from domainhunter.domain.events import SourceEvent
-from domainhunter.llm.provider import (
+from ai_tools_hunter.domain.events import SourceEvent
+from ai_tools_hunter.llm.provider import (
     LLMProvider,
     MockLLMProvider,
     OpenAICompatibleProvider,
@@ -22,9 +22,9 @@ from domainhunter.llm.provider import (
     _extract_tail_json,
     _strip_thinking,
 )
-from domainhunter.llm.schema import LLMResultState
-from domainhunter.pipeline import DomainHunterPipeline, enrich_candidate_with_llm
-from domainhunter.storage.sqlite import SQLiteStore
+from ai_tools_hunter.llm.schema import LLMResultState
+from ai_tools_hunter.pipeline import AIToolsHunterPipeline, enrich_candidate_with_llm
+from ai_tools_hunter.storage.sqlite import SQLiteStore
 
 NOW = datetime(2026, 8, 17, tzinfo=UTC)
 EVIDENCE = (
@@ -60,7 +60,7 @@ def test_mock_provider_returns_a_known_candidate_draft() -> None:
         return await provider.extract(
             domain="example.com",
             evidence=EVIDENCE,
-            schema_version="domainhunter-taxonomy-v1",
+            schema_version="ai-tools-hunter-taxonomy-v1",
         )
 
     result = asyncio.run(run())
@@ -75,7 +75,7 @@ def test_mock_provider_can_be_constructed_with_needs_review_reason() -> None:
         return await provider.extract(
             domain="example.com",
             evidence=EVIDENCE,
-            schema_version="domainhunter-taxonomy-v1",
+            schema_version="ai-tools-hunter-taxonomy-v1",
         )
 
     result = asyncio.run(run())
@@ -132,7 +132,7 @@ def test_openai_compatible_provider_posts_to_chat_completions_and_parses_respons
         return await provider.extract(
             domain="example.com",
             evidence=EVIDENCE,
-            schema_version="domainhunter-taxonomy-v1",
+            schema_version="ai-tools-hunter-taxonomy-v1",
         )
 
     result = asyncio.run(run())
@@ -163,7 +163,7 @@ def test_openai_compatible_provider_maps_non_2xx_to_needs_review() -> None:
         return await provider.extract(
             domain="example.com",
             evidence=EVIDENCE,
-            schema_version="domainhunter-taxonomy-v1",
+            schema_version="ai-tools-hunter-taxonomy-v1",
         )
 
     result = asyncio.run(run())
@@ -186,7 +186,7 @@ def test_openai_compatible_provider_maps_timeout_to_needs_review() -> None:
         return await provider.extract(
             domain="example.com",
             evidence=EVIDENCE,
-            schema_version="domainhunter-taxonomy-v1",
+            schema_version="ai-tools-hunter-taxonomy-v1",
         )
 
     result = asyncio.run(run())
@@ -196,7 +196,7 @@ def test_openai_compatible_provider_maps_timeout_to_needs_review() -> None:
 
 
 def test_pipeline_enriches_a_candidate_using_an_injected_provider(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     html = (
         "<title>Example AI Workflow</title>"
         "<meta name=\"description\" content=\"AI workflow automation platform with a free trial\">"
@@ -211,7 +211,7 @@ def test_pipeline_enriches_a_candidate_using_an_injected_provider(tmp_path) -> N
         async with HTTPProbe(
             resolver=_public_resolver, transport=transport, respect_robots=False
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             event = SourceEvent("ct_log", "argon:42", "example.com", NOW)
             pipeline.ingest_event(event)
             probe_run = await pipeline.probe_domain("example.com", observed_at=NOW)
@@ -240,7 +240,7 @@ def test_pipeline_enriches_a_candidate_using_an_injected_provider(tmp_path) -> N
 
 
 def test_pipeline_enrichment_returns_none_when_provider_needs_review(tmp_path) -> None:
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     html = (
         "<title>Example AI Workflow</title>"
         "<meta name=\"description\" content=\"AI workflow automation platform with a free trial\">"
@@ -254,7 +254,7 @@ def test_pipeline_enrichment_returns_none_when_provider_needs_review(tmp_path) -
         async with HTTPProbe(
             resolver=_public_resolver, transport=transport, respect_robots=False
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(SourceEvent("ct_log", "argon:42", "example.com", NOW))
             probe_run = await pipeline.probe_domain("example.com", observed_at=NOW)
             assert probe_run.candidate_version is not None

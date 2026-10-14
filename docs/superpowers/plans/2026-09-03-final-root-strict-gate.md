@@ -14,7 +14,7 @@
 
 **Files:**
 - Modify: `tests/test_pipeline.py`
-- Modify later: `src/domainhunter/pipeline.py`
+- Modify later: `src/ai_tools_hunter/pipeline.py`
 
 - [x] **Step 1: Add a failing cross-root redirect test**
 
@@ -37,7 +37,7 @@ def test_strict_probe_keeps_observation_but_rejects_cross_root_redirect_candidat
             )
         return httpx.Response(200, text=html, request=request)
 
-    store = SQLiteStore(tmp_path / "domainhunter.db")
+    store = SQLiteStore(tmp_path / "ai_tools_hunter.db")
     event = SourceEvent("ct_log", "nimbus:1", "fresh-redirect.com", OBSERVED_AT)
 
     async def run() -> None:
@@ -46,7 +46,7 @@ def test_strict_probe_keeps_observation_but_rejects_cross_root_redirect_candidat
             transport=httpx.MockTransport(responder),
             respect_robots=False,
         ) as probe:
-            pipeline = DomainHunterPipeline(store=store, probe=probe)
+            pipeline = AIToolsHunterPipeline(store=store, probe=probe)
             pipeline.ingest_event(event)
             result = await pipeline.probe_domain(
                 "fresh-redirect.com",
@@ -78,12 +78,12 @@ Add a sibling test with a 301 from `fresh-site.com` to `https://www.fresh-site.c
 ### Task 2: Fail closed before candidate creation when strict probes cross roots
 
 **Files:**
-- Modify: `src/domainhunter/pipeline.py:1-98`
+- Modify: `src/ai_tools_hunter/pipeline.py:1-98`
 - Test: `tests/test_pipeline.py`
 
 - [x] **Step 1: Add the opt-in parameter and root comparison helper**
 
-Add `require_same_final_root: bool = False` to `DomainHunterPipeline.probe_domain`. Import `urlparse` and add this helper:
+Add `require_same_final_root: bool = False` to `AIToolsHunterPipeline.probe_domain`. Import `urlparse` and add this helper:
 
 ```python
 def _final_url_matches_domain(domain: str, final_url: str | None) -> bool:
@@ -125,7 +125,7 @@ Expected: cross-root redirect has an observation but no review candidate; same-r
 ### Task 3: Enable final-root gating in strict CT orchestration
 
 **Files:**
-- Modify: `src/domainhunter/ingest/ct_orchestrator.py:62-92`
+- Modify: `src/ai_tools_hunter/ingest/ct_orchestrator.py:62-92`
 - Modify: `tests/test_ct_orchestrator.py`
 
 - [x] **Step 1: Add a failing strict orchestration integration test**
@@ -192,7 +192,7 @@ the complete suite passes with 370 tests.
 ### Runtime correction discovered during Task 4
 
 The first live CLI run exposed a stale non-editable package in `.venv`: pytest loaded
-`src/`, while `python -m domainhunter.cli` loaded an older copy in `site-packages`.
+`src/`, while `python -m ai_tools_hunter.cli` loaded an older copy in `site-packages`.
 The live result is therefore invalid until the installer itself makes the worktree
 source importable.
 
@@ -206,7 +206,7 @@ the repository's parent directory as its root.
 
 `dev_install.sh` now resolves its own directory with `BASH_SOURCE`, rebuilds the shim
 on every install, and dispatches the package CLI directly. The regression test passes
-and the live virtual environment imports `src/domainhunter`.
+and the live virtual environment imports `src/ai_tools_hunter`.
 
 - [x] **Step 1: Run all affected automated suites**
 
@@ -232,7 +232,7 @@ Argon were also sampled without lowering a gate.
 Example command:
 
 ```bash
-.venv/bin/python -m domainhunter.cli poll-ct-log \
+.venv/bin/python -m ai_tools_hunter.cli poll-ct-log \
   --database work/live-ct-strict-nimbus-final-root-300.db \
   --log cloudflare-nimbus2026=https://ct.cloudflare.com/logs/nimbus2026 \
   --catchup 300 --page-size 300 --max-probes 50

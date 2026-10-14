@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from domainhunter.domain.candidates import (
+from ai_tools_hunter.domain.candidates import (
     CandidateOutcome,
     CandidateVersionDraft,
     Evidence,

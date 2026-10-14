@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproducible local install for domainhunter.
+# Reproducible local install for AI-Tools-Hunter.
 #
 # Why this exists:
 #   setuptools >= 64 generates the editable marker file
@@ -7,12 +7,12 @@
 #   Python 3.14's site.py calls lstat() and skips any .pth file with the
 #   macOS UF_HIDDEN flag (or the Windows hidden bit). Both `pip install -e .`
 #   and `uv pip install -e .` produce .pth files that carry UF_HIDDEN on
-#   macOS, so the editable install silently fails and `import domainhunter`
+#   macOS, so the editable install silently fails and `import ai_tools_hunter`
 #   raises ModuleNotFoundError.
 #
 # This script runs the editable install, clears UF_HIDDEN from every .pth
-# file in site-packages, writes a companion `domainhunter.pth` that points
-# at <repo>/src, and patches the generated `domainhunter` console script to
+# file in site-packages, writes a companion `ai_tools_hunter.pth` that points
+# at <repo>/src, and patches the generated `AI-Tools-Hunter` console script to
 # re-strip UF_HIDDEN at every invocation. The on-invocation patch matters:
 # we observed macOS Spotlight re-applying UF_HIDDEN to freshly created .pth
 # files within a second of being cleared, so a single install-time fix is
@@ -23,7 +23,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${VENV_PY:-$REPO_ROOT/.venv/bin/python}"
 SITE_PACKAGES="$("$VENV_PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-PTH_NAME="domainhunter.pth"
+PTH_NAME="ai_tools_hunter.pth"
 
 if [ ! -x "$VENV_PY" ]; then
     echo "error: $VENV_PY is not executable; create the venv first (python3 -m venv .venv)" >&2
@@ -67,15 +67,15 @@ fi
 # Python interpreter. We cannot do the chflags inside Python itself because
 # site.py caches sys.path at startup, before any user code runs.
 if [ "$(uname -s)" = "Darwin" ]; then
-    ENTRY="$REPO_ROOT/.venv/bin/domainhunter"
-    SHIM="$REPO_ROOT/.venv/bin/_domainhunter_shim.sh"
+    ENTRY="$REPO_ROOT/.venv/bin/ai-tools-hunter"
+    SHIM="$REPO_ROOT/.venv/bin/_ai_tools_hunter_shim.sh"
     if [ -f "$ENTRY" ]; then
         # 1. Write a tiny shim that chflags every .pth in purelib then invokes
         #    the package CLI. The shim is itself chmod +x.
         SIBLING_PY="$(dirname "$ENTRY")/python"
         cat > "$SHIM" <<EOF
 #!/usr/bin/env bash
-# domainhunter-install-fix: strip UF_HIDDEN before Python starts so site.py
+# ai-tools-hunter-install-fix: strip UF_HIDDEN before Python starts so site.py
 # can read the .pth files. macOS Spotlight re-applies UF_HIDDEN within
 # seconds, so this must run on every invocation, not just at install.
 set -e
@@ -86,26 +86,26 @@ if [ -n "\$SITE_PACKAGES" ] && [ -d "\$SITE_PACKAGES" ]; then
         chflags nohidden "\$pth" 2>/dev/null || true
     done
 fi
-exec "$SIBLING_PY" -c 'from domainhunter.cli import main; raise SystemExit(main())' "\$@"
+exec "$SIBLING_PY" -c 'from ai_tools_hunter.cli import main; raise SystemExit(main())' "\$@"
 EOF
         chmod +x "$SHIM"
-        # 2. Replace the domainhunter entry's shebang with the shim.
+        # 2. Replace the AI-Tools-Hunter entry's shebang with the shim.
         #    The real Python interpreter is still passed via the env so the
         #    shim's `exec` reaches it without re-resolving PATH.
         python3 - "$ENTRY" "$SHIM" <<'PYEOF'
 import sys, os, shlex
 entry, shim = sys.argv[1], sys.argv[2]
 src = open(entry).read()
-prefix = "#!/usr/bin/env bash\n# domainhunter-install-fix\n"
+prefix = "#!/usr/bin/env bash\n# ai-tools-hunter-install-fix\n"
 if src.startswith(prefix):
     rest = src.split("\n", 3)[3]
 else:
     rest = "".join(src.splitlines(keepends=True)[1:])
 quoted_shim = shlex.quote(shim)
-open(entry, "w").write(f"#!/usr/bin/env bash\n# domainhunter-install-fix\nexec {quoted_shim} \"$@\"\n" + rest)
+open(entry, "w").write(f"#!/usr/bin/env bash\n# ai-tools-hunter-install-fix\nexec {quoted_shim} \"$@\"\n" + rest)
 os.chmod(entry, 0o755)
 PYEOF
     fi
 fi
 
-"$VENV_PY" -c 'import domainhunter; print("ok:", domainhunter.__file__)'
+"$VENV_PY" -c 'import ai_tools_hunter; print("ok:", ai_tools_hunter.__file__)'

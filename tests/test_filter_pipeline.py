@@ -3,8 +3,8 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
 
-from domainhunter.filter.pipeline import FilterPipeline
-from domainhunter.filter.rdap_age import MemoryCache, Registration
+from ai_tools_hunter.filter.pipeline import FilterPipeline
+from ai_tools_hunter.filter.rdap_age import MemoryCache, Registration
 from tests.support.clock import ManualClock
 
 
@@ -26,7 +26,7 @@ def _fake_rdap(registrations: dict[str, Registration]):
 
 def _fake_dns(has_a: set[str]):
     def checker(domains: list[str]) -> dict[str, object]:
-        from domainhunter.filter.dns_check import DnsResult
+        from ai_tools_hunter.filter.dns_check import DnsResult
 
         return {
             d: DnsResult(domain=d, has_a=d in has_a, addresses=("1.2.3.4",) if d in has_a else ())

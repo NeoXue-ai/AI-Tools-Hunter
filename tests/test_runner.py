@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from domainhunter.filter.pipeline import FilterPipeline
-from domainhunter.filter.rdap_age import Registration
-from domainhunter.ingest.runner import StartConfig, locate_start_index
+from ai_tools_hunter.filter.pipeline import FilterPipeline
+from ai_tools_hunter.filter.rdap_age import Registration
+from ai_tools_hunter.ingest.runner import StartConfig, locate_start_index
 
 
 class _FakeTimestampFetcher:
@@ -100,7 +100,7 @@ def test_run_follow_cancels_the_digest_loop_when_the_sweep_fails() -> None:
     """
     import asyncio
 
-    from domainhunter.ingest.runner import _run_follow
+    from ai_tools_hunter.ingest.runner import _run_follow
 
     class _Store:
         def __init__(self) -> None:
@@ -233,7 +233,7 @@ def test_merge_cursor_keeps_the_other_logs_entries() -> None:
     """
     import json
 
-    from domainhunter.ingest.runner import _merge_cursor
+    from ai_tools_hunter.ingest.runner import _merge_cursor
 
     store = _CursorStore(json.dumps({"alpha": 100, "beta": 200}))
 
@@ -245,7 +245,7 @@ def test_merge_cursor_keeps_the_other_logs_entries() -> None:
 def test_merge_cursor_never_moves_backwards() -> None:
     import json
 
-    from domainhunter.ingest.runner import _merge_cursor
+    from ai_tools_hunter.ingest.runner import _merge_cursor
 
     store = _CursorStore(json.dumps({"alpha": 100, "beta": 200}))
 
@@ -258,7 +258,7 @@ def test_merge_cursor_never_moves_backwards() -> None:
 def test_merge_cursor_starts_from_an_empty_map() -> None:
     import json
 
-    from domainhunter.ingest.runner import _merge_cursor
+    from ai_tools_hunter.ingest.runner import _merge_cursor
 
     store = _CursorStore(None)
 
@@ -277,7 +277,7 @@ def test_ingest_log_window_abandons_a_permanently_failing_page() -> None:
     """
     import asyncio
 
-    from domainhunter.ingest.runner import _ingest_log_window
+    from ai_tools_hunter.ingest.runner import _ingest_log_window
 
     class _Poller:
         source_name = "ct_log"
@@ -332,7 +332,7 @@ def test_ingest_log_window_gives_up_on_an_empty_page() -> None:
     """
     import asyncio
 
-    from domainhunter.ingest.runner import _ingest_log_window
+    from ai_tools_hunter.ingest.runner import _ingest_log_window
 
     class _Poller:
         source_name = "ct_log"
@@ -379,7 +379,7 @@ def test_run_follow_skips_an_unreachable_log_and_keeps_sweeping() -> None:
     import asyncio
     import json
 
-    from domainhunter.ingest.runner import _run_follow
+    from ai_tools_hunter.ingest.runner import _run_follow
 
     class _Stop(Exception):
         pass
@@ -466,7 +466,7 @@ def test_digest_loop_exits_when_nothing_is_due_even_if_work_is_pending() -> None
     import asyncio
     import json
 
-    from domainhunter.ingest.runner import _run_follow
+    from ai_tools_hunter.ingest.runner import _run_follow
 
     class _Stop(Exception):
         pass
