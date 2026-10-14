@@ -2,66 +2,164 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 简约高级工程背景：极轻柔的漫反射径向晕光与底纹 */
-.bg-ambient-console {
-  background-color: #F8FAFC;
-  background-image: 
-    radial-gradient(at 50% 0%, rgba(226, 232, 240, 0.5) 0px, transparent 60%),
-    radial-gradient(at 100% 100%, rgba(241, 245, 249, 0.6) 0px, transparent 50%);
+/*
+ * AI-Tools-Hunter — "Signal Desk"
+ * Two palettes, one vocabulary. Light reads as paper; dark reads as a
+ * late-night observatory. Every surface is a flat plane separated by a
+ * hairline, never a stack of shadows.
+ */
+:root {
+  --dh-canvas: 249 249 247;
+  --dh-surface: 255 255 255;
+  --dh-raised: 255 255 255;
+  --dh-sunken: 243 243 240;
+  --dh-line: 228 228 223;
+  --dh-line-strong: 208 208 201;
+  --dh-ink: 22 24 28;
+  --dh-ink-2: 84 88 96;
+  --dh-ink-3: 138 142 150;
+  --dh-accent: 45 82 224;
+  --dh-accent-ink: 255 255 255;
+  --dh-accent-soft: 236 240 254;
+  --dh-fresh: 13 148 136;
+  --dh-warm: 202 128 22;
+  --dh-dead: 196 58 78;
+  --dh-slatey: 120 126 138;
+  --dh-shadow: 22 24 28;
 }
 
-.dark .bg-ambient-console {
-  background-color: #090B10;
-  background-image: 
-    radial-gradient(at 50% 0%, rgba(30, 58, 138, 0.12) 0px, transparent 65%),
-    radial-gradient(at 100% 100%, rgba(15, 23, 42, 0.4) 0px, transparent 50%);
+.dark {
+  --dh-canvas: 11 12 15;
+  --dh-surface: 19 20 24;
+  --dh-raised: 24 26 31;
+  --dh-sunken: 15 16 20;
+  --dh-line: 36 38 44;
+  --dh-line-strong: 52 55 63;
+  --dh-ink: 240 241 244;
+  --dh-ink-2: 158 163 174;
+  --dh-ink-3: 112 117 128;
+  --dh-accent: 116 148 255;
+  --dh-accent-ink: 10 12 18;
+  --dh-accent-soft: 30 38 68;
+  --dh-fresh: 45 200 180;
+  --dh-warm: 232 168 62;
+  --dh-dead: 245 113 133;
+  --dh-slatey: 140 146 158;
+  --dh-shadow: 0 0 0;
 }
 
-/* 扫光流光骨架屏 */
-@keyframes shimmer-sweep {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(200%); }
-}
-.animate-shimmer {
-  position: relative;
-  overflow: hidden;
-}
-.animate-shimmer::after {
-  content: "";
-  position: absolute;
-  top: 0; left: 0; width: 100%; height: 100%;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
-  animation: shimmer-sweep 1.4s infinite ease-in-out;
-}
-:not(.dark) .animate-shimmer::after {
-  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.04), transparent);
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scrollbar-gutter: stable;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+    font-feature-settings: "cv05" 1, "ss01" 1;
+  }
+
+  /* Numbers in this product are read comparatively, so they get fixed widths. */
+  .tnum,
+  table,
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--dh-accent));
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+
+  ::selection {
+    background: rgb(var(--dh-accent) / 0.22);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--dh-line-strong));
+    border: 3px solid rgb(var(--dh-canvas));
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--dh-ink-3));
+  }
 }
 
-/* 级联切入动画 */
-@keyframes cascade-slide-up {
-  0% { opacity: 0; transform: translateY(6px); }
-  100% { opacity: 1; transform: translateY(0); }
-}
-.animate-cascade {
-  animation: cascade-slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+@layer components {
+  /* A plane: flat surface + hairline. The only container primitive. */
+  .plane {
+    @apply bg-surface border border-line rounded-card;
+  }
+
+  .hairline-t {
+    @apply border-t border-line;
+  }
+
+  /* Small caps label: the one place uppercase is allowed. */
+  .label {
+    @apply text-2xs font-semibold uppercase tracking-[0.09em] text-ink-3;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md text-sm font-medium
+           transition-colors duration-150 select-none disabled:opacity-40
+           disabled:pointer-events-none;
+  }
+  .btn-sm {
+    @apply h-7 px-2.5 text-xs;
+  }
+  .btn-md {
+    @apply h-9 px-3.5;
+  }
+  .btn-primary {
+    @apply bg-accent text-accent-ink hover:brightness-110 active:brightness-95;
+  }
+  .btn-quiet {
+    @apply text-ink-2 hover:text-ink hover:bg-sunken;
+  }
+  .btn-outline {
+    @apply border border-line-strong text-ink hover:bg-sunken;
+  }
+  .btn-danger {
+    @apply border border-dead/40 text-dead hover:bg-dead/10;
+  }
+
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-line
+           bg-sunken px-1 font-mono text-[10px] font-medium text-ink-3;
+  }
+
+  /* Loading placeholder that reads as the content it replaces. */
+  .shimmer {
+    @apply relative overflow-hidden bg-sunken;
+  }
+  .shimmer::after {
+    content: "";
+    @apply absolute inset-0 animate-sweep;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--dh-ink) / 0.05),
+      transparent
+    );
+  }
 }
 
-/* 机械盖印动效 */
-@keyframes stamp-slam {
-  0% { opacity: 0; transform: scale(2) rotate(-15deg); }
-  70% { opacity: 1; transform: scale(0.95) rotate(-6deg); }
-  100% { opacity: 0.9; transform: scale(1) rotate(-8deg); }
-}
-.animate-stamp {
-  animation: stamp-slam 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards;
-}
-
-/* 数字弹跳回弹 */
-@keyframes pop-bounce {
-  0% { transform: scale(0.8); opacity: 0; }
-  70% { transform: scale(1.1); }
-  100% { transform: scale(1); opacity: 1; }
-}
-.animate-pop {
-  animation: pop-bounce 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

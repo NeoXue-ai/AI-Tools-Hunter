@@ -1,185 +1,260 @@
-import { useCallback, useEffect, useState } from "react";
-import { Languages, Moon, Sun } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { liveApi } from "./api";
-import { CandidateDetailView } from "./components/CandidateDetailView";
-import { InboxView } from "./components/InboxView";
-import { DICT, type Language, type Theme } from "./i18n";
-import type { CandidateSummary } from "./types";
-
-const routeFromLocation = () => {
-  const match = window.location.pathname.match(/^\/review\/([^/]+)$/);
-  return match ? `#/candidate/${decodeURIComponent(match[1])}` : "#/";
-};
-
-const detailIdFromRoute = (route: string) => {
-  const match = route.match(/^#\/candidate\/([^/]+)$/);
-  return match ? match[1] : null;
-};
+import { api } from "./api";
+import { CandidateView } from "./components/CandidateView";
+import { CommandPalette } from "./components/CommandPalette";
+import { Header } from "./components/Header";
+import { PipelineDrawer } from "./components/PipelineDrawer";
+import { QueueView } from "./components/QueueView";
+import { ToastProvider, useToast } from "./components/Toasts";
+import {
+  useActorId,
+  useHotkeys,
+  useLanguage,
+  useNow,
+  useRoute,
+  useTheme,
+} from "./hooks";
+import { DICT } from "./i18n";
+import type { FilterKey, SortKey } from "./lib/derive";
+import type { Candidate, DiscoveryCounts, ReviewAction } from "./types";
 
 export default function App() {
-  const [candidates, setCandidates] = useState<CandidateSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [listError, setListError] = useState<string | null>(null);
+  return (
+    <ToastProvider>
+      <Console />
+    </ToastProvider>
+  );
+}
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [currentRoute, setCurrentRoute] = useState<string>(routeFromLocation);
-  const [actorId, setActorId] = useState<string>(() => localStorage.getItem("dh_actor_id") || "");
+function Console() {
+  const { theme, toggle: toggleTheme } = useTheme();
+  const { lang, toggle: toggleLang } = useLanguage();
+  const { actorId, setActorId } = useActorId();
+  const { route, push } = useRoute();
+  const dict = DICT[lang];
+  const now = useNow();
+  const toast = useToast();
 
-  const [lang, setLang] = useState<Language>(() => {
-    return (localStorage.getItem("dh_lang") as Language) || "zh";
-  });
-  const [theme, setTheme] = useState<Theme>(() => {
-    return (localStorage.getItem("dh_theme") as Theme) || "dark";
-  });
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [counts, setCounts] = useState<DiscoveryCounts | null>(null);
 
-  const [themeRotating, setThemeRotating] = useState(false);
-  const [langRotating, setLangRotating] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [sort, setSort] = useState<SortKey>("priority");
 
-  useEffect(() => {
-    const root = document.documentElement;
-    const body = document.body;
-    if (theme === "dark") {
-      root.classList.add("dark");
-      body.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-      body.classList.remove("dark");
-    }
-    localStorage.setItem("dh_theme", theme);
-  }, [theme]);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [pipelineToken, setPipelineToken] = useState(0);
 
-  useEffect(() => {
-    localStorage.setItem("dh_lang", lang);
-  }, [lang]);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const handleNavigation = () => {
-      setCurrentRoute(routeFromLocation());
-    };
-    window.addEventListener("popstate", handleNavigation);
-    return () => window.removeEventListener("popstate", handleNavigation);
-  }, []);
-
-  const loadCandidates = useCallback(async () => {
-    setIsLoading(true);
-    setListError(null);
+  const loadQueue = useCallback(async (mode: "initial" | "refresh" = "refresh") => {
+    if (mode === "initial") setLoading(true);
+    setRefreshing(true);
     try {
-      const data = await liveApi.fetchCandidates();
-      setCandidates(data);
-    } catch (err: unknown) {
-      setListError((err as Error)?.message || "STREAM_POLL_FAILED");
+      setCandidates(await api.queue());
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setIsLoading(false);
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const overview = await api.overview();
+      setCounts(overview.counts);
+    } catch {
+      /* the header summary is decorative; a failure must not blank the queue */
     }
   }, []);
 
   useEffect(() => {
-    loadCandidates();
-  }, [loadCandidates]);
+    void loadQueue("initial");
+    void loadCounts();
+  }, [loadCounts, loadQueue]);
 
-  const navigateTo = (hash: string) => {
-    const detail = detailIdFromRoute(hash);
-    const path = detail ? `/review/${encodeURIComponent(detail)}` : "/";
-    window.history.pushState({}, "", path);
-    setCurrentRoute(hash);
-  };
+  const scan = useCallback(async () => {
+    setScanning(true);
+    try {
+      const summary = await api.runDiscovery(20);
+      const created = summary.candidates_created;
+      toast.push({
+        tone: created > 0 ? "success" : "info",
+        message:
+          lang === "zh"
+            ? `扫描完成：${summary.certificates_seen} 张证书，新增 ${created} 个候选`
+            : `Scan done: ${summary.certificates_seen} certificates, ${created} new candidates`,
+      });
+      await Promise.all([loadQueue(), loadCounts()]);
+      setPipelineToken((token) => token + 1);
+    } catch (caught) {
+      toast.push({
+        tone: "danger",
+        message: caught instanceof Error ? caught.message : String(caught),
+      });
+    } finally {
+      setScanning(false);
+    }
+  }, [lang, loadCounts, loadQueue, toast]);
 
-  const handleSaveActorId = (id: string) => {
-    setActorId(id);
-    localStorage.setItem("dh_actor_id", id);
-  };
+  // The next candidate to offer after a decision, wrapping around the queue.
+  const nextCandidateId = useMemo(() => {
+    const currentId = route.candidateId;
+    if (!currentId) return null;
+    const index = candidates.findIndex((item) => item.candidate_id === currentId);
+    const rest =
+      index === -1
+        ? candidates
+        : [...candidates.slice(index + 1), ...candidates.slice(0, index)];
+    return rest[0]?.candidate_id ?? null;
+  }, [candidates, route.candidateId]);
 
-  const toggleTheme = () => {
-    setThemeRotating(true);
-    setTheme((prev) => (prev === "light" ? "dark" : "light"));
-    setTimeout(() => setThemeRotating(false), 250);
-  };
+  const handleDecided = useCallback(
+    async (_action: ReviewAction, _domain: string, nextId: string | null) => {
+      await loadQueue();
+      void loadCounts();
+      push(nextId ? { name: "candidate", candidateId: nextId } : { name: "queue" });
+    },
+    [loadCounts, loadQueue, push],
+  );
 
-  const toggleLang = () => {
-    setLangRotating(true);
-    setLang((prev) => (prev === "zh" ? "en" : "zh"));
-    setTimeout(() => setLangRotating(false), 250);
-  };
+  const openCandidate = useCallback(
+    (candidateId: string) => push({ name: "candidate", candidateId }),
+    [push],
+  );
 
-  const d = DICT[lang];
-  const activeCandidateId = detailIdFromRoute(currentRoute);
+  useHotkeys({
+    "mod+k": (event) => {
+      event.preventDefault();
+      setPaletteOpen((open) => !open);
+    },
+    "/": (event) => {
+      if (route.name !== "queue") return;
+      event.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    },
+  });
+
+  const onQueue = route.name === "queue";
 
   return (
-    <div className="min-h-screen bg-ambient-console text-slate-900 dark:text-slate-100 font-mono antialiased selection:bg-blue-500/20 selection:text-blue-500 transition-colors duration-200">
-      {/* 极简工程顶栏 */}
-      <header className="h-13 bg-white/80 dark:bg-[#090B10]/80 backdrop-blur-md border-b border-slate-200/80 dark:border-slate-800/80 sticky top-0 z-30 font-mono">
-        <div className="max-w-5xl mx-auto h-full px-4 sm:px-6 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <span className="font-black tracking-tight text-sm text-slate-900 dark:text-white uppercase">
-              DomainHunter
-            </span>
-            <span className="text-slate-300 dark:text-slate-700">/</span>
-            <span className="text-xs text-slate-500 font-bold uppercase">
-              {d.brandSubtitle}
-            </span>
-          </div>
+    <div className="min-h-screen bg-canvas">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-[80] focus:rounded-md focus:bg-surface focus:px-3 focus:py-1.5 focus:text-xs focus:text-ink focus:shadow-pop"
+      >
+        {dict.skipToContent}
+      </a>
 
-          <div className="flex items-center gap-2 sm:gap-3">
-            <button
-              type="button"
-              onClick={toggleLang}
-              className="p-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 rounded-md transition inline-flex items-center gap-1 active:scale-95"
-              title="Switch Language"
-            >
-              <Languages
-                className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-250 ${
-                  langRotating ? "rotate-180" : "rotate-0"
-                }`}
-              />
-              <span className="font-mono text-[10px] font-bold uppercase">{lang}</span>
-            </button>
+      <Header
+        dict={dict}
+        counts={counts}
+        queueLength={candidates.length}
+        theme={theme}
+        lang={lang}
+        actorId={actorId}
+        scanning={scanning}
+        refreshing={refreshing}
+        onToggleTheme={toggleTheme}
+        onToggleLang={toggleLang}
+        onOpenPipeline={() => setPipelineOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
+        onScan={scan}
+        onRefresh={() => void loadQueue()}
+        onSetActor={setActorId}
+      />
 
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="p-1.5 text-xs text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800/60 rounded-md transition active:scale-95"
-              title="Toggle Theme"
-            >
-              <div className={`transition-transform duration-250 ${themeRotating ? "rotate-180" : "rotate-0"}`}>
-                {theme === "light" ? (
-                  <Moon className="w-3.5 h-3.5 text-slate-600" />
-                ) : (
-                  <Sun className="w-3.5 h-3.5 text-amber-400" />
-                )}
-              </div>
-            </button>
-
-            <div className="h-3 w-px bg-slate-200 dark:bg-slate-800 mx-0.5" />
-
-                      </div>
-        </div>
-      </header>
-
-      {/* 主视区 */}
-      <main>
-        {activeCandidateId ? (
-          <CandidateDetailView
-            candidateId={activeCandidateId}
-            onBackToInbox={() => navigateTo("#/")}
-            actorId={actorId}
-            onSaveActorId={handleSaveActorId}
-            lang={lang}
-          />
-        ) : (
-          <InboxView
+      <main id="main">
+        {onQueue ? (
+          <QueueView
+            dict={dict}
             candidates={candidates}
-            isLoading={isLoading}
-            error={listError}
-            onRetry={loadCandidates}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onSelectCandidate={(id) => navigateTo(`#/candidate/${id}`)}
-            lang={lang}
+            loading={loading}
+            error={error}
+            now={now}
+            query={query}
+            filter={filter}
+            sort={sort}
+            onQueryChange={setQuery}
+            onFilterChange={setFilter}
+            onSortChange={setSort}
+            onOpen={openCandidate}
+            onRetry={() => void loadQueue()}
+            onScan={scan}
+            scanning={scanning}
+            searchInputRef={searchRef}
           />
-        )}
+        ) : route.candidateId ? (
+          <CandidateView
+            dict={dict}
+            candidateId={route.candidateId}
+            actorId={actorId}
+            now={now}
+            onBack={() => push({ name: "queue" })}
+            onDecided={handleDecided}
+            nextCandidateId={nextCandidateId}
+            onOpenCandidate={openCandidate}
+          />
+        ) : null}
       </main>
 
+      {onQueue && (
+        <footer className="mx-auto max-w-[1400px] px-4 pb-8 sm:px-6">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-4 text-2xs text-ink-3">
+            <span className="label">{dict.keyboardHint}</span>
+            <Hint keys={["J", "K"]} text={dict.hintMove} />
+            <Hint keys={["↵"]} text={dict.hintOpen} />
+            <Hint keys={["/"]} text={dict.hintSearch} />
+            <Hint keys={["⌘", "K"]} text={dict.commands} />
+          </div>
+        </footer>
+      )}
+
+      <PipelineDrawer
+        dict={dict}
+        lang={lang}
+        open={pipelineOpen}
+        onClose={() => setPipelineOpen(false)}
+        scanning={scanning}
+        onScan={scan}
+        refreshToken={pipelineToken}
+      />
+
+      <CommandPalette
+        dict={dict}
+        theme={theme}
+        open={paletteOpen}
+        candidates={candidates}
+        onClose={() => setPaletteOpen(false)}
+        onOpenCandidate={openCandidate}
+        onToggleTheme={toggleTheme}
+        onToggleLang={toggleLang}
+        onRefresh={() => void loadQueue()}
+        onScan={scan}
+        onOpenPipeline={() => setPipelineOpen(true)}
+      />
     </div>
   );
 }
+
+const Hint: React.FC<{ keys: string[]; text: string }> = ({ keys, text }) => (
+  <span className="flex items-center gap-1.5">
+    <span className="flex gap-0.5">
+      {keys.map((key) => (
+        <kbd key={key} className="kbd">
+          {key}
+        </kbd>
+      ))}
+    </span>
+    {text}
+  </span>
+);
